@@ -6,15 +6,42 @@ export interface AppUser {
   name: string;
   role: UserRole;
   phone?: string;
+  assignedRegions?: string[]; // array of region IDs
   createdAt: string;
 }
 
+export interface Region {
+  id?: string;
+  name: string;
+  createdAt: string;
+}
+
+export interface Customer {
+  id?: string;
+  shopName: string;
+  ownerName: string;
+  phone: string;
+  alternatePhone?: string;
+  address: string;
+  area: string;
+  regionId: string;
+  regionName: string;
+  lat?: number;
+  lng?: number;
+  locationAddress?: string; // reverse geocoded address
+  gstin?: string;
+  notes?: string;
+  createdAt?: string;
+}
+
 export type GSTRate = "none" | "5" | "12" | "18" | "28";
-export type ProductUnit = "Piece" | "KG" | "Gram" | "Liter" | "ML" | "Box" | "Packet" | "Dozen" | "Bag" | "Bottle" | "Other";
+export type ProductUnit =
+  | "Piece" | "KG" | "Gram" | "Liter" | "ML"
+  | "Box" | "Packet" | "Dozen" | "Bag" | "Bottle" | "Other";
 
 export interface PriceSlab {
   minQty: number;
-  maxQty: number | null; // null = "and above"
+  maxQty: number | null;
   price: number;
 }
 
@@ -42,16 +69,6 @@ export interface Product {
   updatedAt?: string;
 }
 
-export interface Customer {
-  id?: string;
-  shopName: string;
-  ownerName: string;
-  phone: string;
-  address: string;
-  area: string;
-  createdAt?: string;
-}
-
 export interface OrderItem {
   productId: string;
   productName: string;
@@ -61,7 +78,8 @@ export interface OrderItem {
   total: number;
 }
 
-export type OrderStatus = "pending" | "packed" | "out_for_delivery" | "delivered";
+export type OrderStatus =
+  | "pending" | "packed" | "out_for_delivery" | "delivered";
 
 export interface Order {
   id?: string;
