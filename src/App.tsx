@@ -12,12 +12,36 @@ import Orders from "./pages/Orders";
 import Products from "./pages/Products";
 import Customers from "./pages/Customers";
 import Users from "./pages/Users";
+import PackingStation from "./pages/PackingStation";
+import Settings from "./pages/Settings";
 import Layout from "./components/Layout";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuthStore();
-  if (loading) return <div className="flex items-center justify-center h-screen text-gray-500">Loading...</div>;
+  if (loading)
+    return (
+      <div className="flex items-center justify-center h-screen text-gray-500">
+        Loading...
+      </div>
+    );
   if (!user) return <Navigate to="/login" />;
+  return <>{children}</>;
+}
+
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuthStore();
+  if (loading) return null;
+  if (!user) return <Navigate to="/login" />;
+  if (user.role !== "admin") return <Navigate to="/packing" />;
+  return <>{children}</>;
+}
+
+function PackingRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuthStore();
+  if (loading) return null;
+  if (!user) return <Navigate to="/login" />;
+  if (user.role !== "packing_staff" && user.role !== "admin")
+    return <Navigate to="/" />;
   return <>{children}</>;
 }
 
@@ -30,6 +54,8 @@ export default function App() {
         const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
         if (userDoc.exists()) {
           setUser(userDoc.data() as AppUser);
+        } else {
+          setUser(null);
         }
       } else {
         setUser(null);
@@ -43,6 +69,7 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
+
         <Route
           path="/"
           element={
@@ -51,12 +78,19 @@ export default function App() {
             </ProtectedRoute>
           }
         >
-          <Route index element={<Dashboard />} />
-          <Route path="orders" element={<Orders />} />
-          <Route path="products" element={<Products />} />
-          <Route path="customers" element={<Customers />} />
-          <Route path="users" element={<Users />} />
+          {/* Admin-only routes */}
+          <Route index element={<AdminRoute><Dashboard /></AdminRoute>} />
+          <Route path="orders"    element={<AdminRoute><Orders /></AdminRoute>} />
+          <Route path="products"  element={<AdminRoute><Products /></AdminRoute>} />
+          <Route path="customers" element={<AdminRoute><Customers /></AdminRoute>} />
+          <Route path="users"     element={<AdminRoute><Users /></AdminRoute>} />
+          <Route path="settings"  element={<AdminRoute><Settings /></AdminRoute>} />
+
+          {/* Packing staff + admin */}
+          <Route path="packing" element={<PackingRoute><PackingStation /></PackingRoute>} />
         </Route>
+
+        <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </BrowserRouter>
   );

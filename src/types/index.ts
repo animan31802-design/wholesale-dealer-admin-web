@@ -1,4 +1,4 @@
-export type UserRole = "admin" | "field_agent" | "delivery";
+export type UserRole = "admin" | "field_agent" | "delivery" | "packing_staff";
 
 export interface AppUser {
   uid: string;
@@ -6,7 +6,7 @@ export interface AppUser {
   name: string;
   role: UserRole;
   phone?: string;
-  assignedRegions?: string[]; // array of region IDs
+  assignedRegions?: string[];
   createdAt: string;
 }
 
@@ -28,9 +28,11 @@ export interface Customer {
   regionName: string;
   lat?: number;
   lng?: number;
-  locationAddress?: string; // reverse geocoded address
+  locationAddress?: string;
   gstin?: string;
   notes?: string;
+  outstandingDue?: number;
+  creditLimit?: number;
   createdAt?: string;
 }
 
@@ -60,6 +62,7 @@ export interface Product {
   gst: GSTRate;
   trackInventory: boolean;
   stock: number;
+  reservedStock?: number;
   minStockAlert: number;
   safetyBuffer?: SafetyBuffer;
   sellInFraction: boolean;
@@ -79,13 +82,23 @@ export interface OrderItem {
 }
 
 export type OrderStatus =
-  | "pending" | "packed" | "out_for_delivery" | "delivered";
+  | "pending"
+  | "packed"
+  | "assigned"
+  | "out_for_delivery"
+  | "delivered";
+
+export type InvoiceType = "gst" | "estimate";
+export type BillingMode = "with_due" | "without_due";
 
 export interface Order {
   id?: string;
   customerId: string;
   customerName: string;
   customerAddress: string;
+  customerPhone?: string;
+  customerLat?: number;
+  customerLng?: number;
   agentId: string;
   agentName: string;
   items: OrderItem[];
@@ -94,9 +107,17 @@ export interface Order {
   deliveryPersonId?: string;
   deliveryPersonName?: string;
   vehicleNumber?: string;
+  assignedAt?: string;
   notes?: string;
+  invoiceNumber?: string;
+  invoiceType?: InvoiceType;
+  signatureUrl?: string;
+  signature?: string;
+  amountCollected?: number;
+  paymentMode?: "cash" | "upi" | "bank" | "credit";
   createdAt: string;
   packedAt?: string;
+  packedBy?: string;
+  packedByName?: string;
   deliveredAt?: string;
-  signature?: string;
 }

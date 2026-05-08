@@ -26,12 +26,13 @@ export default function Login() {
         return;
       }
       const userData = userDoc.data() as AppUser;
-      if (userData.role !== "admin") {
-        setError("Only admins can access this dashboard.");
+      if (userData.role !== "admin" && userData.role !== "packing_staff") {
+        setError("Access denied. Only admin and packing staff can use this dashboard.");
         return;
       }
       setUser(userData);
-      navigate("/");
+      // Packing staff go directly to packing view
+      navigate(userData.role === "packing_staff" ? "/packing" : "/");
     } catch {
       setError("Invalid email or password.");
     } finally {

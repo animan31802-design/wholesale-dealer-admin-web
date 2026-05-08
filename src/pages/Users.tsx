@@ -118,10 +118,12 @@ export default function Users() {
     admin: "bg-orange-100 text-orange-700",
     field_agent: "bg-blue-100 text-blue-700",
     delivery: "bg-green-100 text-green-700",
+    packing_staff: "bg-purple-100 text-purple-700",
   };
 
   const fieldAgents = users.filter((u) => u.role === "field_agent");
   const deliveryAgents = users.filter((u) => u.role === "delivery");
+  const packingStaff = users.filter((u) => u.role === "packing_staff");
   const admins = users.filter((u) => u.role === "admin");
 
   // Reusable user group table with optional region column
@@ -211,6 +213,7 @@ export default function Users() {
         <div className="space-y-8">
           <UserTable title="Field Agents" userList={fieldAgents} showRegions={true} />
           <UserTable title="Delivery Agents" userList={deliveryAgents} showRegions={false} />
+          <UserTable title="Packing Staff" userList={packingStaff} showRegions={false} />
           <UserTable title="Admins" userList={admins} showRegions={false} />
         </div>
       )}
@@ -244,6 +247,7 @@ export default function Users() {
                 <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as UserRole })}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
                   <option value="admin">Admin</option>
+                  <option value="packing_staff">Packing Staff</option>
                   <option value="field_agent">Field Agent</option>
                   <option value="delivery">Delivery Agent</option>
                 </select>
@@ -293,6 +297,7 @@ export default function Users() {
                   onChange={(e) => setEditForm({ ...editForm, role: e.target.value as UserRole })}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
                   <option value="admin">Admin</option>
+                  <option value="packing_staff">Packing Staff</option>
                   <option value="field_agent">Field Agent</option>
                   <option value="delivery">Delivery Agent</option>
                 </select>
