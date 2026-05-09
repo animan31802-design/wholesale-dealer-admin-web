@@ -6,6 +6,7 @@ import {
 import { db } from "../firebase/config";
 import { Customer, Region } from "../types";
 import MapPicker from "../components/MapPicker";
+import { useAuthStore } from "../store/authStore";
 
 const emptyCustomer = (): Customer => ({
   shopName: "",
@@ -35,6 +36,8 @@ export default function Customers() {
   const [newRegion, setNewRegion] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [filterRegion, setFilterRegion] = useState("");
+  const { user } = useAuthStore();
+  const isAdmin = user?.role === "admin";
 
   const fetchRegions = async (): Promise<Region[]> => {
     const regSnap = await getDocs(query(collection(db, "regions"), orderBy("name")));
@@ -141,12 +144,16 @@ export default function Customers() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold text-gray-800">Customers</h2>
-        <button
-          onClick={() => { setForm(emptyCustomer()); setEditId(null); setShowForm(true); }}
-          className="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-600"
-        >
-          + Add Customer
-        </button>
+        {isAdmin ? (
+          <button
+            onClick={() => { setForm(emptyCustomer()); setEditId(null); setShowForm(true); }}
+            className="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-600"
+          >
+            + Add Customer
+          </button>
+        ) : (
+          <span className="text-xs text-gray-400 bg-gray-100 px-3 py-2 rounded-lg">View Only</span>
+        )}
       </div>
 
       {/* Filters */}
@@ -179,7 +186,7 @@ export default function Customers() {
                 <th className="px-5 py-4">Region</th>
                 <th className="px-5 py-4">Area</th>
                 <th className="px-5 py-4">Location</th>
-                <th className="px-5 py-4">Actions</th>
+                {isAdmin && <th className="px-5 py-4">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -208,10 +215,12 @@ export default function Customers() {
                       <span className="text-gray-400 text-xs">No location</span>
                     )}
                   </td>
-                  <td className="px-5 py-4 flex gap-2">
-                    <button onClick={() => handleEdit(customer)} className="text-blue-500 hover:underline text-xs">Edit</button>
-                    <button onClick={() => handleDelete(customer.id!)} className="text-red-500 hover:underline text-xs">Delete</button>
-                  </td>
+                  {isAdmin && (
+                    <td className="px-5 py-4 flex gap-2">
+                      <button onClick={() => handleEdit(customer)} className="text-blue-500 hover:underline text-xs">Edit</button>
+                      <button onClick={() => handleDelete(customer.id!)} className="text-red-500 hover:underline text-xs">Delete</button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -221,7 +230,7 @@ export default function Customers() {
       )}
 
       {/* Customer Form Modal */}
-      {showForm && (
+      {showForm && isAdmin && (
         <div className="fixed inset-0 bg-black/60 flex items-start justify-center z-50 overflow-y-auto py-8 px-4">
           <div className="bg-white rounded-2xl w-full max-w-xl shadow-2xl">
             {/* Modal Header */}

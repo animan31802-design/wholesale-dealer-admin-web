@@ -32,7 +32,7 @@ export default function Login() {
       }
       setUser(userData);
       // Packing staff go directly to packing view
-      navigate(userData.role === "packing_staff" ? "/packing" : "/");
+      navigate(userData.role === "packing_staff" ? "/orders" : "/");
     } catch {
       setError("Invalid email or password.");
     } finally {

@@ -12,36 +12,40 @@ import Orders from "./pages/Orders";
 import Products from "./pages/Products";
 import Customers from "./pages/Customers";
 import Users from "./pages/Users";
-import PackingStation from "./pages/PackingStation";
 import Settings from "./pages/Settings";
+import PackingStation from "./pages/PackingStation";
 import Layout from "./components/Layout";
+
+// ── Route guards ─────────────────────────────────────────────────
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuthStore();
   if (loading)
     return (
-      <div className="flex items-center justify-center h-screen text-gray-500">
+      <div className="flex items-center justify-center h-screen text-gray-500 text-sm">
         Loading...
       </div>
     );
-  if (!user) return <Navigate to="/login" />;
+  if (!user) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
 
+// Admin only — redirects packing staff to /orders
 function AdminRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuthStore();
   if (loading) return null;
-  if (!user) return <Navigate to="/login" />;
-  if (user.role !== "admin") return <Navigate to="/packing" />;
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role !== "admin") return <Navigate to="/orders" replace />;
   return <>{children}</>;
 }
 
-function PackingRoute({ children }: { children: React.ReactNode }) {
+// Admin + packing_staff allowed — everyone else goes to /login
+function OpsRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuthStore();
   if (loading) return null;
-  if (!user) return <Navigate to="/login" />;
-  if (user.role !== "packing_staff" && user.role !== "admin")
-    return <Navigate to="/" />;
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role !== "admin" && user.role !== "packing_staff")
+    return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
 
@@ -78,19 +82,19 @@ export default function App() {
             </ProtectedRoute>
           }
         >
-          {/* Admin-only routes */}
-          <Route index element={<AdminRoute><Dashboard /></AdminRoute>} />
-          <Route path="orders"    element={<AdminRoute><Orders /></AdminRoute>} />
-          <Route path="products"  element={<AdminRoute><Products /></AdminRoute>} />
-          <Route path="customers" element={<AdminRoute><Customers /></AdminRoute>} />
+          {/* Admin only */}
+          <Route index        element={<AdminRoute><Dashboard /></AdminRoute>} />
           <Route path="users"     element={<AdminRoute><Users /></AdminRoute>} />
           <Route path="settings"  element={<AdminRoute><Settings /></AdminRoute>} />
 
-          {/* Packing staff + admin */}
-          <Route path="packing" element={<PackingRoute><PackingStation /></PackingRoute>} />
+          {/* Admin + packing staff */}
+          <Route path="orders"    element={<OpsRoute><Orders /></OpsRoute>} />
+          <Route path="products"  element={<OpsRoute><Products /></OpsRoute>} />
+          <Route path="customers" element={<OpsRoute><Customers /></OpsRoute>} />
+          <Route path="packing"   element={<OpsRoute><PackingStation /></OpsRoute>} />
         </Route>
 
-        <Route path="*" element={<Navigate to="/" />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   );

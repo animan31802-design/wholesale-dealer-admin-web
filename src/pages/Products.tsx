@@ -5,6 +5,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Product, PriceSlab, ProductUnit, GSTRate } from "../types";
+import { useAuthStore } from "../store/authStore";
 
 const UNITS: ProductUnit[] = ["Piece", "KG", "Gram", "Liter", "ML", "Box", "Packet", "Dozen", "Bag", "Bottle", "Other"];
 const GST_RATES: { label: string; value: GSTRate }[] = [
@@ -44,6 +45,8 @@ export default function Products() {
   const [bulkLoading, setBulkLoading] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<Product | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const { user } = useAuthStore();
+  const isAdmin = user?.role === "admin";
 
   const fetchProducts = async () => {
     const snap = await getDocs(query(collection(db, "products"), orderBy("name")));
@@ -206,23 +209,32 @@ export default function Products() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold text-gray-800">Products</h2>
-          <p className="text-sm text-gray-400 mt-0.5">{products.length} products · Stock value ₹{stockValue.toLocaleString("en-IN", { maximumFractionDigits: 0 })}</p>
+          <p className="text-sm text-gray-400 mt-0.5">
+            {products.length} products{isAdmin ? ` · Stock value ₹${stockValue.toLocaleString("en-IN", { maximumFractionDigits: 0 })}` : ""}
+          </p>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => setShowBulkModal(true)} className="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm hover:bg-gray-50">
-            📊 Bulk Price
-          </button>
-          <button onClick={() => fileRef.current?.click()} className="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm hover:bg-gray-50">
-            ⬆️ Import CSV
-          </button>
-          <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleImport} />
-          <button onClick={handleExport} className="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm hover:bg-gray-50">
-            ⬇️ Export CSV
-          </button>
-          <button onClick={() => { setForm(emptyProduct()); setEditId(null); setShowForm(true); }}
-            className="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-600">
-            + Add Product
-          </button>
+          {isAdmin && (
+            <>
+              <button onClick={() => setShowBulkModal(true)} className="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm hover:bg-gray-50">
+                📊 Bulk Price
+              </button>
+              <button onClick={() => fileRef.current?.click()} className="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm hover:bg-gray-50">
+                ⬆️ Import CSV
+              </button>
+              <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleImport} />
+              <button onClick={handleExport} className="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm hover:bg-gray-50">
+                ⬇️ Export CSV
+              </button>
+              <button onClick={() => { setForm(emptyProduct()); setEditId(null); setShowForm(true); }}
+                className="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-600">
+                + Add Product
+              </button>
+            </>
+          )}
+          {!isAdmin && (
+            <span className="text-xs text-gray-400 bg-gray-100 px-3 py-2 rounded-lg">View Only</span>
+          )}
         </div>
       </div>
 
@@ -285,11 +297,11 @@ export default function Products() {
                 <th className="px-5 py-4">Category</th>
                 <th className="px-5 py-4">Unit</th>
                 <th className="px-5 py-4">Sell Price</th>
-                <th className="px-5 py-4">Cost Price</th>
+                {isAdmin && <th className="px-5 py-4">Cost Price</th>}
                 <th className="px-5 py-4">GST</th>
                 <th className="px-5 py-4">Stock</th>
                 <th className="px-5 py-4">Slabs</th>
-                <th className="px-5 py-4">Actions</th>
+                {isAdmin && <th className="px-5 py-4">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -311,9 +323,9 @@ export default function Products() {
                     <td className="px-5 py-4 text-gray-500 text-xs">{product.unit}</td>
                     <td className="px-5 py-4">
                       <span className="font-medium text-gray-800">₹{product.sellingPrice}</span>
-                      {margin(product) && <span className="text-[10px] text-green-500 ml-1">+{margin(product)}%</span>}
+                      {isAdmin && margin(product) && <span className="text-[10px] text-green-500 ml-1">+{margin(product)}%</span>}
                     </td>
-                    <td className="px-5 py-4 text-gray-500">₹{product.costPrice}</td>
+                    {isAdmin && <td className="px-5 py-4 text-gray-500">₹{product.costPrice}</td>}
                     <td className="px-5 py-4">
                       {product.gst === "none"
                         ? <span className="text-gray-400 text-xs">No GST</span>
@@ -333,14 +345,16 @@ export default function Products() {
                       {product.priceSlabs?.length > 0 ? `${product.priceSlabs.length} slabs` : "—"}
                     </td>
                     <td className="px-5 py-4">
-                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => handleEdit(product)}
-                          className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100">✏️ Edit</button>
-                        <button onClick={() => handleDuplicate(product)}
-                          className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded hover:bg-gray-100">📋 Copy</button>
-                        <button onClick={() => setDeleteConfirm(product)}
-                          className="text-xs bg-red-50 text-red-500 px-2 py-1 rounded hover:bg-red-100">🗑️</button>
-                      </div>
+                      {isAdmin && (
+                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button onClick={() => handleEdit(product)}
+                            className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100">✏️ Edit</button>
+                          <button onClick={() => handleDuplicate(product)}
+                            className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded hover:bg-gray-100">📋 Copy</button>
+                          <button onClick={() => setDeleteConfirm(product)}
+                            className="text-xs bg-red-50 text-red-500 px-2 py-1 rounded hover:bg-red-100">🗑️</button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 );
@@ -351,14 +365,14 @@ export default function Products() {
           {filtered.length > 0 && (
             <div className="px-5 py-3 border-t border-gray-100 flex justify-between text-xs text-gray-400">
               <span>Showing {filtered.length} of {products.length} products</span>
-              <span>Stock value (cost): ₹{stockValue.toLocaleString("en-IN", { maximumFractionDigits: 0 })}</span>
+{isAdmin && <span>Stock value (cost): ₹{stockValue.toLocaleString("en-IN", { maximumFractionDigits: 0 })}</span>}
             </div>
           )}
         </div>
       )}
 
       {/* ── Product Form Modal ── */}
-      {showForm && (
+      {showForm && isAdmin && (
         <div className="fixed inset-0 bg-black/60 flex items-start justify-center z-50 overflow-y-auto py-8 px-4">
           <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
@@ -522,7 +536,7 @@ export default function Products() {
       )}
 
       {/* ── Bulk Price Modal ── */}
-      {showBulkModal && (
+      {showBulkModal && isAdmin && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
             <h3 className="text-lg font-semibold text-gray-800 mb-1">Bulk Price Update</h3>
@@ -540,7 +554,7 @@ export default function Products() {
       )}
 
       {/* ── Delete Confirm Modal ── */}
-      {deleteConfirm && (
+      {deleteConfirm && isAdmin && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
             <h3 className="text-lg font-semibold text-gray-800 mb-2">Delete Product?</h3>

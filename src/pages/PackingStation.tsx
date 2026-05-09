@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  collection, onSnapshot, doc, updateDoc, orderBy, query, where
+  collection, onSnapshot, doc, updateDoc, query, where
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Order } from "../types";
@@ -16,12 +16,14 @@ export default function PackingStation() {
     // Real-time listener — only pending orders
     const q = query(
       collection(db, "orders"),
-      where("status", "==", "pending"),
-      orderBy("createdAt", "asc") // oldest first — FIFO packing
+      where("status", "==", "pending")
     );
 
     const unsub = onSnapshot(q, (snap) => {
-      setOrders(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Order)));
+      const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Order));
+      // Sort oldest first (FIFO) — client side, no composite index needed
+      docs.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      setOrders(docs);
       setLoading(false);
     });
 

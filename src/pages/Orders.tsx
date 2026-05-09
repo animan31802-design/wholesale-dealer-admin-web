@@ -4,6 +4,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Order, AppUser } from "../types";
+import { useAuthStore } from "../store/authStore";
 import { generateInvoicePDF, generateGSTInvoice, generateEstimateInvoice } from "../utils/invoice";
 import { Customer, InvoiceType, BillingMode } from "../types";
 
@@ -29,6 +30,9 @@ export default function Orders() {
   const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [invoiceOrder, setInvoiceOrder] = useState<Order | null>(null);
+  const { user } = useAuthStore();
+  // Both admin and packing_staff can manage orders
+  const canManageOrders = user?.role === "admin" || user?.role === "packing_staff";
   const [activeTab, setActiveTab] = useState<"all" | "pending" | "packed" | "assigned" | "out_for_delivery" | "delivered">("all");
 
   useEffect(() => {
