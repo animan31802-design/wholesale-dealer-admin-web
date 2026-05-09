@@ -36,7 +36,7 @@ async function getNextInvoiceNumber(prefix: string): Promise<string> {
   return `${prefix}-${year}-${String(serial).padStart(3, "0")}`;
 }
 
-export async function generateInvoicePDF(
+export async function buildInvoicePDF(
   order: Order,
   customer?: Partial<Customer>,
   options?: Partial<InvoiceOptions>
@@ -271,8 +271,18 @@ export async function generateInvoicePDF(
   else        pdf.text("* Subject to jurisdiction of local courts.", M, 285);
   pdf.text(biz?.invoiceFooter || "Thank you for your business!", W / 2, 290, { align: "center" });
 
-  const fname = `${isGST ? "invoice" : "estimate"}-${invoiceNumber}.pdf`;
-  pdf.save(fname);
+  return pdf;
+}
+
+export async function generateInvoicePDF(
+  order: Order,
+  customer?: Partial<Customer>,
+  options?: Partial<InvoiceOptions>
+) {
+  const isGST = (options?.invoiceType ?? "estimate") === "gst";
+  const prefix = isGST ? "invoice" : "estimate";
+  const pdf = await buildInvoicePDF(order, customer, options);
+  pdf.save(`${prefix}-${(order.id ?? "order").slice(0, 8)}.pdf`);
 }
 
 export const generateGSTInvoice = (

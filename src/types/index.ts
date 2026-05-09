@@ -86,7 +86,8 @@ export type OrderStatus =
   | "packed"
   | "assigned"
   | "out_for_delivery"
-  | "delivered";
+  | "delivered"
+  | "cancelled";
 
 export type InvoiceType = "gst" | "estimate";
 export type BillingMode = "with_due" | "without_due";
@@ -120,4 +121,8 @@ export interface Order {
   packedBy?: string;
   packedByName?: string;
   deliveredAt?: string;
+  cancelledAt?: string;
+  cancelledBy?: string;
+  cancelledByName?: string;
+  cancellationReason?: string;
 }
