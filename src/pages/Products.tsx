@@ -93,7 +93,7 @@ export default function Products() {
   const lowStockCount   = products.filter((p) => p.trackInventory && p.stock > 0 && p.stock <= p.minStockAlert).length;
   const outOfStockCount = products.filter((p) => p.trackInventory && p.stock <= 0).length;
   const allCategories   = ["All", ...categories];
-  const stockValue      = filtered.reduce((s, p) => s + (p.costPrice * p.stock), 0);
+  const stockValue      = filtered.reduce((s, p) => s + (p.sellingPrice * p.stock), 0);
 
   // ── CRUD ──
   const handleSubmit = async (e: React.FormEvent) => {
@@ -218,7 +218,7 @@ export default function Products() {
         <div>
           <h2 className="text-2xl font-bold text-gray-800">Products</h2>
           <p className="text-sm text-gray-400 mt-0.5">
-            {products.length} products{isAdmin ? ` · Stock value ₹${stockValue.toLocaleString("en-IN", { maximumFractionDigits: 0 })}` : ""}
+            {products.length} products{isAdmin ? ` · Stock value ₹${stockValue.toLocaleString("en-IN", { maximumFractionDigits: 0 })} (sell price)` : ""}
           </p>
         </div>
         <div className="flex gap-2">
@@ -313,7 +313,7 @@ export default function Products() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {filtered.map((product) => {
+              {paginated.map((product) => {
                 const isOut = product.trackInventory && product.stock <= 0;
                 const isLow = product.trackInventory && product.stock > 0 && product.stock <= product.minStockAlert;
                 return (
@@ -370,10 +370,10 @@ export default function Products() {
             </tbody>
           </table>
           {filtered.length === 0 && <div className="text-center py-12 text-gray-400">No products found.</div>}
-          {filtered.length > 0 && (
-            <div className="px-5 py-3 border-t border-gray-100 flex justify-between text-xs text-gray-400">
-              <span>Showing {filtered.length} of {products.length} products</span>
-{isAdmin && <span>Stock value (cost): ₹{stockValue.toLocaleString("en-IN", { maximumFractionDigits: 0 })}</span>}
+          <Pagination total={filtered.length} page={page} perPage={PER_PAGE} onPage={setPage} />
+          {isAdmin && filtered.length > 0 && (
+            <div className="px-5 py-2 text-xs text-gray-400 text-right border-t border-gray-100">
+              Stock value (sell price): ₹{stockValue.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
             </div>
           )}
         </div>

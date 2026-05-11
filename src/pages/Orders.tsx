@@ -31,6 +31,8 @@ export default function Orders() {
   const [invoiceOrder, setInvoiceOrder] = useState<Order | null>(null);
   const [detailOrder, setDetailOrder]   = useState<Order | null>(null);
   const [cancelOrder, setCancelOrder]   = useState<Order | null>(null);
+  const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set());
+  const [showBulkAssign, setShowBulkAssign] = useState(false);
   const { user } = useAuthStore();
 
   // ── Filter state ─────────────────────────────────────────────
@@ -61,10 +63,54 @@ export default function Orders() {
   const fieldAgents    = [...new Map(orders.map((o) => [o.agentId, { id: o.agentId, name: o.agentName }])).values()];
   const regions        = [...new Set(orders.map((o) => (o as any).regionName).filter(Boolean))];
 
+  const toggleSelect = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (allPackedSelected) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        packedInView.forEach((o) => next.delete(o.id!));
+        return next;
+      });
+    } else {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        packedInView.forEach((o) => next.add(o.id!));
+        return next;
+      });
+    }
+  };
+
   const markPacked = async (orderId: string) => {
     await updateDoc(doc(db, "orders", orderId), {
       status: "packed", packedAt: new Date().toISOString(),
     });
+  };
+
+  const bulkAssignDelivery = async (person: AppUser, vehicle: string) => {
+    const ids = [...selectedIds].filter((id) =>
+      orders.find((o) => o.id === id)?.status === "packed"
+    );
+    await Promise.all(
+      ids.map((id) =>
+        updateDoc(doc(db, "orders", id), {
+          deliveryPersonId:   person.uid,
+          deliveryPersonName: person.name,
+          vehicleNumber:      vehicle,
+          status:             "assigned",
+          assignedAt:         new Date().toISOString(),
+        })
+      )
+    );
+    setSelectedIds(new Set());
+    setShowBulkAssign(false);
   };
 
   const assignDelivery = async (orderId: string, person: AppUser, vehicle: string) => {
@@ -111,8 +157,8 @@ export default function Orders() {
 
   const hasActiveFilters = search || filterAgent || filterRegion || filterDelivery || dateFrom || dateTo;
 
-  // Reset to page 1 whenever filters/tab change
-  useEffect(() => { setPage(1); }, [activeTab, search, filterAgent, filterRegion, filterDelivery, dateFrom, dateTo]);
+  // Reset to page 1 and clear selection whenever filters/tab change
+  useEffect(() => { setPage(1); setSelectedIds(new Set()); }, [activeTab, search, filterAgent, filterRegion, filterDelivery, dateFrom, dateTo]);
 
   const clearFilters = () => {
     setSearch(""); setFilterAgent(""); setFilterRegion("");
@@ -120,6 +166,10 @@ export default function Orders() {
   };
 
   const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+
+  // Only packed orders can be bulk assigned
+  const packedInView = paginated.filter((o) => o.status === "packed");
+  const allPackedSelected = packedInView.length > 0 && packedInView.every((o) => selectedIds.has(o.id!));
 
   if (loading) return <div className="p-8 text-gray-400">Loading orders...</div>;
 
@@ -237,10 +287,50 @@ export default function Orders() {
       )}
 
       {/* Table */}
+      {/* Bulk assign toolbar */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center justify-between bg-indigo-50 border border-indigo-200 rounded-xl px-5 py-3 mb-3">
+          <div className="flex items-center gap-3">
+            <span className="w-6 h-6 rounded-full bg-indigo-500 text-white text-xs font-bold flex items-center justify-center">
+              {selectedIds.size}
+            </span>
+            <span className="text-sm font-medium text-indigo-700">
+              {selectedIds.size} packed order{selectedIds.size !== 1 ? "s" : ""} selected
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              className="text-xs text-indigo-500 hover:text-indigo-700 px-3 py-1.5 rounded-lg hover:bg-indigo-100"
+            >
+              Clear
+            </button>
+            <button
+              onClick={() => setShowBulkAssign(true)}
+              className="bg-indigo-500 text-white text-sm font-semibold px-4 py-1.5 rounded-lg hover:bg-indigo-600"
+            >
+              🚚 Assign All to Delivery Agent
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-gray-500 text-left text-xs uppercase tracking-wide">
             <tr>
+              <th className="px-3 py-4 w-10">
+                {packedInView.length > 0 && (
+                  <input
+                    type="checkbox"
+                    checked={allPackedSelected}
+                    onChange={toggleSelectAll}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-4 h-4 rounded accent-orange-500 cursor-pointer"
+                    title="Select all packed orders"
+                  />
+                )}
+              </th>
               <th className="px-5 py-4">Customer</th>
               <th className="px-5 py-4">Agent</th>
               <th className="px-5 py-4">Amount</th>
@@ -252,7 +342,17 @@ export default function Orders() {
           </thead>
           <tbody className="divide-y divide-gray-100">
             {paginated.map((order) => (
-              <tr key={order.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => setDetailOrder(order)}>
+              <tr key={order.id} className={`hover:bg-gray-50 cursor-pointer ${selectedIds.has(order.id!) ? "bg-orange-50" : ""}`} onClick={() => setDetailOrder(order)}>
+                <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                  {order.status === "packed" && (
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(order.id!)}
+                      onChange={(e) => toggleSelect(order.id!, e as any)}
+                      className="w-4 h-4 rounded accent-orange-500 cursor-pointer"
+                    />
+                  )}
+                </td>
                 <td className="px-5 py-3">
                   <p className="font-medium text-gray-800">{order.customerName}</p>
                   <p className="text-xs text-gray-400">
@@ -321,6 +421,15 @@ export default function Orders() {
         )}
         <Pagination total={filtered.length} page={page} perPage={PER_PAGE} onPage={setPage} />
       </div>
+
+      {showBulkAssign && (
+        <BulkAssignModal
+          count={selectedIds.size}
+          deliveryUsers={deliveryUsers}
+          onAssign={bulkAssignDelivery}
+          onClose={() => setShowBulkAssign(false)}
+        />
+      )}
 
       {cancelOrder && (
         <CancelOrderModal
@@ -928,6 +1037,97 @@ function CancelOrderModal({
             className="flex-1 bg-red-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-red-600 disabled:opacity-50"
           >
             {saving ? "Cancelling..." : "Yes, Cancel Order"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Bulk Assign Modal ─────────────────────────────────────────────
+function BulkAssignModal({
+  count,
+  deliveryUsers,
+  onAssign,
+  onClose,
+}: {
+  count: number;
+  deliveryUsers: AppUser[];
+  onAssign: (person: AppUser, vehicle: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [selectedPerson, setSelectedPerson] = useState<AppUser | null>(null);
+  const [vehicleNumber, setVehicleNumber]   = useState("");
+  const [saving, setSaving]                 = useState(false);
+
+  const handleAssign = async () => {
+    if (!selectedPerson || !vehicleNumber.trim()) return;
+    setSaving(true);
+    try {
+      await onAssign(selectedPerson, vehicleNumber.trim());
+    } catch {
+      alert("Failed to assign. Try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
+        <h3 className="text-lg font-semibold text-gray-800 mb-1">Bulk Assign Delivery</h3>
+        <p className="text-sm text-gray-500 mb-4">
+          Assigning <span className="font-semibold text-indigo-600">{count} packed order{count !== 1 ? "s" : ""}</span> to one delivery agent
+        </p>
+
+        <div className="bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-3 text-xs text-indigo-700 mb-5">
+          ℹ️ All selected orders will be assigned to the same agent and vehicle. Status will change to <strong>Assigned</strong>. Agent must confirm collection in their app.
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Delivery Agent</label>
+            <select
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              onChange={(e) => setSelectedPerson(deliveryUsers.find((u) => u.uid === e.target.value) || null)}
+            >
+              <option value="">— Select agent —</option>
+              {deliveryUsers.map((u) => (
+                <option key={u.uid} value={u.uid}>{u.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Vehicle Number</label>
+            <input
+              type="text"
+              value={vehicleNumber}
+              onChange={(e) => setVehicleNumber(e.target.value.toUpperCase())}
+              placeholder="TN 01 AB 1234"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            />
+          </div>
+        </div>
+
+        {selectedPerson && vehicleNumber && (
+          <div className="mt-4 bg-gray-50 rounded-lg px-4 py-3 text-sm text-gray-600">
+            <span className="font-medium">{count} order{count !== 1 ? "s" : ""}</span> → <span className="font-medium text-indigo-600">{selectedPerson.name}</span> · {vehicleNumber}
+          </div>
+        )}
+
+        <div className="flex gap-3 mt-5">
+          <button
+            onClick={onClose}
+            className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm hover:bg-gray-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleAssign}
+            disabled={!selectedPerson || !vehicleNumber.trim() || saving}
+            className="flex-1 bg-indigo-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-indigo-600 disabled:opacity-50"
+          >
+            {saving ? "Assigning..." : `Assign ${count} Order${count !== 1 ? "s" : ""}`}
           </button>
         </div>
       </div>
