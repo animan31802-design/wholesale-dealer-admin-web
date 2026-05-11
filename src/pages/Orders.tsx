@@ -6,6 +6,7 @@ import { db } from "../firebase/config";
 import { Order, AppUser } from "../types";
 import { useAuthStore } from "../store/authStore";
 import { buildInvoicePDF } from "../utils/invoice";
+import Pagination from "../components/Pagination";
 import { Customer, InvoiceType, BillingMode } from "../types";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -41,6 +42,8 @@ export default function Orders() {
   const [dateFrom, setDateFrom]     = useState("");
   const [dateTo, setDateTo]         = useState("");
   const [showFilters, setShowFilters] = useState(false);
+  const [page, setPage] = useState(1);
+  const PER_PAGE = 20;
 
   useEffect(() => {
     const q = query(collection(db, "orders"), orderBy("createdAt", "desc"));
@@ -108,10 +111,15 @@ export default function Orders() {
 
   const hasActiveFilters = search || filterAgent || filterRegion || filterDelivery || dateFrom || dateTo;
 
+  // Reset to page 1 whenever filters/tab change
+  useEffect(() => { setPage(1); }, [activeTab, search, filterAgent, filterRegion, filterDelivery, dateFrom, dateTo]);
+
   const clearFilters = () => {
     setSearch(""); setFilterAgent(""); setFilterRegion("");
-    setFilterDelivery(""); setDateFrom(""); setDateTo("");
+    setFilterDelivery(""); setDateFrom(""); setDateTo(""); setPage(1);
   };
+
+  const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
   if (loading) return <div className="p-8 text-gray-400">Loading orders...</div>;
 
@@ -243,7 +251,7 @@ export default function Orders() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {filtered.map((order) => (
+            {paginated.map((order) => (
               <tr key={order.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => setDetailOrder(order)}>
                 <td className="px-5 py-3">
                   <p className="font-medium text-gray-800">{order.customerName}</p>
@@ -311,6 +319,7 @@ export default function Orders() {
             {hasActiveFilters ? "No orders match your filters." : "No orders in this category."}
           </div>
         )}
+        <Pagination total={filtered.length} page={page} perPage={PER_PAGE} onPage={setPage} />
       </div>
 
       {cancelOrder && (

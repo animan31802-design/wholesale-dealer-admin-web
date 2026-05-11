@@ -6,6 +6,7 @@ import {
 import { db } from "../firebase/config";
 import { Product, PriceSlab, ProductUnit, GSTRate } from "../types";
 import { useAuthStore } from "../store/authStore";
+import Pagination from "../components/Pagination";
 
 const UNITS: ProductUnit[] = ["Piece", "KG", "Gram", "Liter", "ML", "Box", "Packet", "Dozen", "Bag", "Bottle", "Other"];
 const GST_RATES: { label: string; value: GSTRate }[] = [
@@ -47,6 +48,8 @@ export default function Products() {
   const fileRef = useRef<HTMLInputElement>(null);
   const { user } = useAuthStore();
   const isAdmin = user?.role === "admin";
+  const [page, setPage] = useState(1);
+  const PER_PAGE = 25;
 
   const fetchProducts = async () => {
     const snap = await getDocs(query(collection(db, "products"), orderBy("name")));
@@ -81,6 +84,11 @@ export default function Products() {
     }
     return list;
   }, [products, searchTerm, catFilter, stockFilter, sortBy]);
+
+  // Reset page on filter change
+  useEffect(() => { setPage(1); }, [searchTerm, catFilter, stockFilter, sortBy]);
+
+  const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
   const lowStockCount   = products.filter((p) => p.trackInventory && p.stock > 0 && p.stock <= p.minStockAlert).length;
   const outOfStockCount = products.filter((p) => p.trackInventory && p.stock <= 0).length;

@@ -6,6 +6,8 @@ import {
 import { db } from "../firebase/config";
 import { Customer, Region } from "../types";
 import { LedgerEntry } from "../types/ledger";
+import Pagination from "../components/Pagination";
+import { Order } from "../types";
 import { getLedger, calcBalance, recordManualPayment, recordAdjustment } from "../utils/ledger";
 import MapPicker from "../components/MapPicker";
 import { useAuthStore } from "../store/authStore";
@@ -45,6 +47,8 @@ export default function Customers() {
   const [searchTerm, setSearchTerm]   = useState("");
   const [filterRegion, setFilterRegion] = useState("");
   const [ledgerCustomer, setLedgerCustomer] = useState<Customer | null>(null);
+  const [page, setPage] = useState(1);
+  const PER_PAGE = 15;
   const { user } = useAuthStore();
   const isAdmin = user?.role === "admin";
 
@@ -123,6 +127,10 @@ export default function Customers() {
     return matchSearch && matchRegion;
   });
 
+  useEffect(() => { setPage(1); }, [searchTerm, filterRegion]);
+
+  const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+
   const totalDue         = customers.reduce((s, c) => s + (c.outstandingDue || 0), 0);
   const customersWithDue = customers.filter((c) => (c.outstandingDue || 0) > 0).length;
 
@@ -189,7 +197,7 @@ export default function Customers() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {filtered.map((customer) => {
+              {paginated.map((customer) => {
                 const due = customer.outstandingDue || 0;
                 return (
                   <tr key={customer.id} className={`hover:bg-gray-50 ${due > 0 ? "bg-red-50/30" : ""}`}>
@@ -240,6 +248,7 @@ export default function Customers() {
             </tbody>
           </table>
           {filtered.length === 0 && <div className="text-center py-12 text-gray-400">No customers found.</div>}
+          <Pagination total={filtered.length} page={page} perPage={PER_PAGE} onPage={setPage} />
         </div>
       )}
 
@@ -335,10 +344,24 @@ function LedgerModal({ customer, isAdmin, onClose }: {
   const { user } = useAuthStore();
   const [entries, setEntries]     = useState<LedgerEntry[]>([]);
   const [loading, setLoading]     = useState(true);
-  const [tab, setTab]             = useState<"ledger" | "payment" | "adjust">("ledger");
+  const [tab, setTab]             = useState<"ledger" | "orders" | "payment" | "adjust">("ledger");
+  const [custOrders, setCustOrders] = useState<Order[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
   const [amount, setAmount]       = useState("");
   const [note, setNote]           = useState("");
   const [saving, setSaving]       = useState(false);
+
+  const fetchOrders = async () => {
+    setOrdersLoading(true);
+    try {
+      const { getDocs, collection: col, query: q, where, orderBy: ob } = await import("firebase/firestore");
+      const snap = await getDocs(
+        q(col(db, "orders"), where("customerId", "==", customer.id), ob("createdAt", "desc"))
+      );
+      setCustOrders(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Order)));
+    } catch { setCustOrders([]); }
+    finally { setOrdersLoading(false); }
+  };
 
   const fetchLedger = async () => {
     setLoading(true);
@@ -348,6 +371,7 @@ function LedgerModal({ customer, isAdmin, onClose }: {
   };
 
   useEffect(() => { fetchLedger(); }, [customer.id]);
+  useEffect(() => { if (tab === "orders") fetchOrders(); }, [tab]);
 
   const balance = calcBalance(entries);
 
@@ -408,17 +432,21 @@ function LedgerModal({ customer, isAdmin, onClose }: {
         <div className="flex border-b border-gray-100 flex-shrink-0">
           <button onClick={() => setTab("ledger")}
             className={`flex-1 py-3 text-sm font-medium transition-all ${tab === "ledger" ? "border-b-2 border-orange-500 text-orange-600" : "text-gray-500 hover:text-gray-700"}`}>
-            📋 Ledger History
+            📋 Ledger
+          </button>
+          <button onClick={() => setTab("orders")}
+            className={`flex-1 py-3 text-sm font-medium transition-all ${tab === "orders" ? "border-b-2 border-orange-500 text-orange-600" : "text-gray-500 hover:text-gray-700"}`}>
+            📦 Orders
           </button>
           {isAdmin && (
             <>
               <button onClick={() => { setTab("payment"); setAmount(""); setNote(""); }}
                 className={`flex-1 py-3 text-sm font-medium transition-all ${tab === "payment" ? "border-b-2 border-green-500 text-green-600" : "text-gray-500 hover:text-gray-700"}`}>
-                💰 Record Payment
+                💰 Payment
               </button>
               <button onClick={() => { setTab("adjust"); setAmount(""); setNote(""); }}
                 className={`flex-1 py-3 text-sm font-medium transition-all ${tab === "adjust" ? "border-b-2 border-blue-500 text-blue-600" : "text-gray-500 hover:text-gray-700"}`}>
-                ✏️ Adjustment
+                ✏️ Adjust
               </button>
             </>
           )}
@@ -486,6 +514,79 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                     <td className={`px-5 py-3 text-right font-bold text-lg ${balance > 0 ? "text-red-600" : "text-green-600"}`}>
                       ₹{balance.toFixed(2)}
                     </td>
+                  </tr>
+                </tfoot>
+              </table>
+            )
+          )}
+
+          {/* Orders tab */}
+          {tab === "orders" && (
+            ordersLoading ? (
+              <div className="text-center py-12 text-gray-400">Loading orders...</div>
+            ) : custOrders.length === 0 ? (
+              <div className="text-center py-16 text-gray-400">
+                <p className="text-3xl mb-3">📭</p>
+                <p className="font-medium">No orders yet</p>
+              </div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide sticky top-0">
+                  <tr>
+                    <th className="px-5 py-3 text-left">Date</th>
+                    <th className="px-5 py-3 text-left">Agent</th>
+                    <th className="px-5 py-3 text-right">Amount</th>
+                    <th className="px-5 py-3 text-left">Status</th>
+                    <th className="px-5 py-3 text-right">Collected</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {custOrders.map((o) => {
+                    const STATUS_C: Record<string,string> = {
+                      pending:"bg-yellow-100 text-yellow-700", packed:"bg-blue-100 text-blue-700",
+                      assigned:"bg-indigo-100 text-indigo-700", out_for_delivery:"bg-purple-100 text-purple-700",
+                      delivered:"bg-green-100 text-green-700", cancelled:"bg-gray-100 text-gray-500",
+                    };
+                    const STATUS_L: Record<string,string> = {
+                      pending:"Pending", packed:"Packed", assigned:"Assigned",
+                      out_for_delivery:"Out for Delivery", delivered:"Delivered", cancelled:"Cancelled",
+                    };
+                    const balance = o.amountCollected !== undefined ? o.totalAmount - o.amountCollected : null;
+                    return (
+                      <tr key={o.id} className="hover:bg-gray-50">
+                        <td className="px-5 py-3 text-gray-500 whitespace-nowrap text-xs">
+                          {new Date(o.createdAt).toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" })}
+                        </td>
+                        <td className="px-5 py-3 text-gray-600 text-xs">{o.agentName}</td>
+                        <td className="px-5 py-3 text-right font-medium text-gray-800">₹{o.totalAmount.toFixed(2)}</td>
+                        <td className="px-5 py-3">
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_C[o.status] || ""}`}>
+                            {STATUS_L[o.status] || o.status}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 text-right text-xs">
+                          {o.amountCollected !== undefined ? (
+                            <div>
+                              <span className="text-green-600 font-medium">₹{o.amountCollected.toFixed(2)}</span>
+                              {balance !== null && balance > 0 && (
+                                <p className="text-red-500">₹{balance.toFixed(2)} due</p>
+                              )}
+                            </div>
+                          ) : <span className="text-gray-300">—</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot className="bg-gray-50 border-t border-gray-200">
+                  <tr>
+                    <td colSpan={2} className="px-5 py-3 text-xs font-semibold text-gray-500">
+                      {custOrders.length} orders total
+                    </td>
+                    <td className="px-5 py-3 text-right font-bold text-gray-800">
+                      ₹{custOrders.reduce((s,o) => s + o.totalAmount, 0).toFixed(2)}
+                    </td>
+                    <td colSpan={2} />
                   </tr>
                 </tfoot>
               </table>
