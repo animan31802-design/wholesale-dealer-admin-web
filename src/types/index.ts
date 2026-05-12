@@ -80,6 +80,8 @@ export interface OrderItem {
   unit: string;
   quantity: number;
   total: number;
+  hsn?: string;
+  gst?: string;
 }
 
 export type OrderStatus =

@@ -144,11 +144,12 @@ export async function buildInvoicePDF(
   const col = {
     no:    M,
     name:  M + 8,
-    qty:   isGST ? 110 : 128,
-    unit:  isGST ? 124 : 142,
-    rate:  isGST ? 138 : 158,
-    cgst:  isGST ? 152 : 0,
-    sgst:  isGST ? 164 : 0,
+    hsn:   isGST ? 80 : 0,
+    qty:   isGST ? 105 : 128,
+    unit:  isGST ? 119 : 142,
+    rate:  isGST ? 133 : 158,
+    cgst:  isGST ? 150 : 0,
+    sgst:  isGST ? 163 : 0,
     total: W - M,
   };
 
@@ -159,6 +160,7 @@ export async function buildInvoicePDF(
   pdf.setFont("helvetica", "bold");
   pdf.text("#",       col.no + 1,  y + 5.5);
   pdf.text("Product", col.name,    y + 5.5);
+  if (isGST) pdf.text("HSN", col.hsn, y + 5.5);
   pdf.text("Qty",     col.qty,     y + 5.5, { align: "right" });
   pdf.text("Unit",    col.unit,    y + 5.5);
   pdf.text("Rate",    col.rate,    y + 5.5, { align: "right" });
@@ -179,7 +181,7 @@ export async function buildInvoicePDF(
       pdf.setFillColor(250, 250, 250);
       pdf.rect(M, y - 3, W - M * 2, 8, "F");
     }
-    const gstRate = parseFloat((item as any).gst ?? "0") || 0;
+    const gstRate = parseFloat(item.gst ?? "0") || 0;
     const cgstRate = gstRate / 2;
     const base = isGST && gstRate > 0 ? item.price / (1 + gstRate / 100) : item.price;
     const lineBase = base * item.quantity;
@@ -195,6 +197,7 @@ export async function buildInvoicePDF(
       pdf.splitTextToSize(item.productName, 65)[0],
       col.name, y + 2
     );
+    if (isGST) pdf.text(item.hsn || "—", col.hsn, y + 2);
     pdf.text(String(item.quantity), col.qty,   y + 2, { align: "right" });
     pdf.text(item.unit,             col.unit,  y + 2);
     pdf.text(item.price.toFixed(2), col.rate,  y + 2, { align: "right" });

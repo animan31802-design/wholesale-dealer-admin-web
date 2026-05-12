@@ -338,8 +338,8 @@ export default function Products() {
                     </td>
                     {isAdmin && <td className="px-5 py-4 text-gray-500">₹{product.costPrice}</td>}
                     <td className="px-5 py-4 text-gray-500 text-xs">
-  {product.hsn || "—"}
-</td>
+                      {product.hsn || "—"}
+                    </td>
                     <td className="px-5 py-4">
                       {product.gst === "none"
                         ? <span className="text-gray-400 text-xs">No GST</span>
@@ -456,16 +456,16 @@ export default function Products() {
                   </div>
                 )}
                 <Field label="HSN Code (Optional)">
-  <input
-    value={form.hsn || ""}
-    onChange={(e) => setForm({ ...form, hsn: e.target.value })}
-    placeholder="e.g. 1006 (for rice)"
-    className={inputCls}
-  />
-  <p className="text-xs text-gray-400 mt-1">
-    Harmonised System of Nomenclature code for GST invoicing
-  </p>
-</Field>
+                  <input
+                    value={form.hsn || ""}
+                    onChange={(e) => setForm({ ...form, hsn: e.target.value })}
+                    placeholder="e.g. 1006 (for rice)"
+                    className={inputCls}
+                  />
+                  <p className="text-xs text-gray-400 mt-1">
+                    Harmonised System of Nomenclature code for GST invoicing
+                  </p>
+                </Field>
                 <Field label="GST Rate *">
                   <div className="flex flex-wrap gap-2">
                     {GST_RATES.map((g) => (
