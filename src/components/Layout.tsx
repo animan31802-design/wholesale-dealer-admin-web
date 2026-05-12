@@ -22,14 +22,14 @@ const packingNavItems = [
 ];
 
 export default function Layout() {
-  const { user, setUser } = useAuthStore();
+  const { user, logout } = useAuthStore();
   const navigate = useNavigate();
   const isPackingStaff = user?.role === "packing_staff";
   const navItems = isPackingStaff ? packingNavItems : adminNavItems;
 
   const handleLogout = async () => {
     await signOut(auth);
-    setUser(null);
+    logout();
     navigate("/login");
   };
 

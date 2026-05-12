@@ -80,7 +80,19 @@ export async function buildInvoicePDF(
     .filter(Boolean)
     .join("  |  ");
   if (contactLine) pdf.text(contactLine, M, 22);
-  if (isGST && biz?.gstin) pdf.text(`GSTIN: ${biz.gstin}`, M, 27);
+  if (isGST) {
+    if (biz?.gstin) {
+      pdf.setFont("helvetica", "bold");
+      pdf.text(`GSTIN: ${biz.gstin}`, M, 27);
+      pdf.setFont("helvetica", "normal");
+    } else {
+      pdf.setTextColor(200, 80, 80);
+      pdf.setFont("helvetica", "italic");
+      pdf.text("GSTIN: Not set — add in Settings", M, 27);
+      pdf.setFont("helvetica", "normal");
+      pdf.setTextColor(255, 255, 255);
+    }
+  }
 
   pdf.setFontSize(11);
   pdf.setFont("helvetica", "bold");
@@ -100,7 +112,7 @@ export async function buildInvoicePDF(
   // ── Bill to box ──────────────────────────────────────────────
   let y = 38;
   pdf.setFillColor(249, 249, 249);
-  pdf.roundedRect(M, y, 90, 30, 2, 2, "F");
+  pdf.roundedRect(M, y, 90, isGST ? 36 : 30, 2, 2, "F");
   pdf.setFontSize(8);
   pdf.setTextColor(150);
   pdf.setFont("helvetica", "bold");

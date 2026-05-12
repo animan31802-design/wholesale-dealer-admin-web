@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import {
-  collection, onSnapshot, doc, updateDoc, orderBy, query, getDoc, runTransaction
+  collection, onSnapshot, doc, updateDoc, orderBy, query, getDoc, runTransaction,
+  getDocs
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Order, AppUser } from "../types";
@@ -53,15 +54,15 @@ export default function Orders() {
       setOrders(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Order)));
       setLoading(false);
     });
-    const unsub2 = onSnapshot(query(collection(db, "users")), (snap) => {
+    getDocs(query(collection(db, "users"))).then((snap) => {
       setAllUsers(snap.docs.map((d) => d.data() as AppUser));
     });
-    return () => { unsub(); unsub2(); };
+    return () => { unsub(); };
   }, []);
 
   const deliveryUsers  = allUsers.filter((u) => u.role === "delivery");
   const fieldAgents    = [...new Map(orders.map((o) => [o.agentId, { id: o.agentId, name: o.agentName }])).values()];
-  const regions        = [...new Set(orders.map((o) => (o as any).regionName).filter(Boolean))];
+  const regions        = [...new Set(orders.map((o) => o.regionName).filter(Boolean))];
 
   const toggleSelect = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -90,7 +91,10 @@ export default function Orders() {
 
   const markPacked = async (orderId: string) => {
     await updateDoc(doc(db, "orders", orderId), {
-      status: "packed", packedAt: new Date().toISOString(),
+      status: "packed",
+      packedAt: new Date().toISOString(),
+      packedBy: user?.uid,
+      packedByName: user?.name,
     });
   };
 
@@ -137,7 +141,7 @@ export default function Orders() {
       );
     }
     if (filterAgent)    list = list.filter((o) => o.agentId === filterAgent);
-    if (filterRegion)   list = list.filter((o) => (o as any).regionName === filterRegion);
+    if (filterRegion)   list = list.filter((o) => o.regionName === filterRegion);
     if (filterDelivery) list = list.filter((o) => o.deliveryPersonId === filterDelivery);
     if (dateFrom)       list = list.filter((o) => o.createdAt >= dateFrom);
     if (dateTo)         list = list.filter((o) => o.createdAt <= dateTo + "T23:59:59");
@@ -465,18 +469,21 @@ export default function Orders() {
 function InvoiceModal({ order, onClose }: { order: Order; onClose: () => void }) {
   const [invoiceType, setInvoiceType] = useState<InvoiceType>("estimate");
   const [billingMode, setBillingMode] = useState<BillingMode>("without_due");
-  const [customerDue, setCustomerDue] = useState("");
-  const [pdfUrl, setPdfUrl]           = useState<string | null>(null);
-  const [loadingDue, setLoadingDue]   = useState(false);
-  const [generating, setGenerating]   = useState(false);
+  const [customerDue, setCustomerDue]     = useState("");
+  const [customerData, setCustomerData]   = useState<any>(null);
+  const [pdfUrl, setPdfUrl]               = useState<string | null>(null);
+  const [loadingDue, setLoadingDue]       = useState(false);
+  const [generating, setGenerating]       = useState(false);
 
-  // Auto-load customer outstanding due
+  // Auto-load full customer data (GSTIN + outstanding due)
   useEffect(() => {
     if (!order.customerId) return;
     setLoadingDue(true);
     getDoc(doc(db, "customers", order.customerId)).then((snap) => {
       if (snap.exists()) {
-        const due = snap.data().outstandingDue || 0;
+        const data = snap.data();
+        setCustomerData(data);
+        const due = data.outstandingDue || 0;
         if (due > 0) { setCustomerDue(String(due)); setBillingMode("with_due"); }
       }
       setLoadingDue(false);
@@ -491,7 +498,7 @@ function InvoiceModal({ order, onClose }: { order: Order; onClose: () => void })
   const handlePreview = async () => {
     setGenerating(true);
     if (pdfUrl) URL.revokeObjectURL(pdfUrl);
-    const pdf = await buildInvoicePDF(order, undefined, {
+    const pdf = await buildInvoicePDF(order, customerData || undefined, {
       invoiceType,
       billingMode,
       customerDue: billingMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
@@ -502,7 +509,7 @@ function InvoiceModal({ order, onClose }: { order: Order; onClose: () => void })
   };
 
   const handleDownload = async () => {
-    const pdf = await buildInvoicePDF(order, undefined, {
+    const pdf = await buildInvoicePDF(order, customerData || undefined, {
       invoiceType,
       billingMode,
       customerDue: billingMode === "with_due" ? parseFloat(customerDue) || 0 : 0,

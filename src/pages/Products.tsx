@@ -1,7 +1,8 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import {
   collection, getDocs, addDoc, updateDoc,
-  deleteDoc, doc, orderBy, query
+  deleteDoc, doc, orderBy, query,
+  onSnapshot
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Product, PriceSlab, ProductUnit, GSTRate } from "../types";
@@ -25,7 +26,7 @@ const emptyProduct = (): Product => ({
   sellingPrice: 0, costPrice: 0, gst: "none",
   trackInventory: true, stock: 0, minStockAlert: 0,
   safetyBuffer: { type: "fixed", value: 0 },
-  sellInFraction: false, priceSlabs: [], barcode: "",
+  sellInFraction: false, priceSlabs: [], barcode: "", hsn: "",
 });
 
 export default function Products() {
@@ -51,16 +52,16 @@ export default function Products() {
   const [page, setPage] = useState(1);
   const PER_PAGE = 25;
 
-  const fetchProducts = async () => {
-    const snap = await getDocs(query(collection(db, "products"), orderBy("name")));
-    const prods = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Product));
-    setProducts(prods);
-    const cats = [...new Set(prods.map((p) => p.category).filter(Boolean))];
-    setCategories(cats);
-    setLoading(false);
-  };
-
-  useEffect(() => { fetchProducts(); }, []);
+  useEffect(() => {
+    const unsub = onSnapshot(query(collection(db, "products"), orderBy("name")), (snap) => {
+      const prods = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Product));
+      setProducts(prods);
+      const cats = [...new Set(prods.map((p) => p.category).filter(Boolean))];
+      setCategories(cats);
+      setLoading(false);
+    });
+    return () => unsub();
+  }, []);
 
   // ── Filtering & Sorting ──
   const filtered = useMemo(() => {
@@ -104,7 +105,7 @@ export default function Products() {
     if (editId) { await updateDoc(doc(db, "products", editId), { ...data }); }
     else { await addDoc(collection(db, "products"), data); }
     setForm(emptyProduct()); setEditId(null); setShowForm(false);
-    fetchProducts();
+    ////fetchProducts();
   };
 
   const handleEdit = (product: Product) => {
@@ -115,13 +116,13 @@ export default function Products() {
   const handleDelete = async (product: Product) => {
     await deleteDoc(doc(db, "products", product.id!));
     setDeleteConfirm(null);
-    fetchProducts();
+    //fetchProducts();
   };
 
   const handleDuplicate = async (product: Product) => {
     const { id, ...rest } = product;
     await addDoc(collection(db, "products"), { ...rest, name: `${product.name} (Copy)`, stock: 0, createdAt: new Date().toISOString() });
-    fetchProducts();
+    //fetchProducts();
   };
 
   // ── Bulk Price Update ──
@@ -136,15 +137,15 @@ export default function Products() {
       });
     }
     setBulkLoading(false); setShowBulkModal(false); setBulkPct("");
-    fetchProducts();
+    //fetchProducts();
   };
 
   // ── Export CSV ──
   const handleExport = () => {
-    const headers = ["Name","Category","Unit","SellingPrice","CostPrice","GST","Stock","MinStockAlert","SellInFraction","Barcode"];
+    const headers = ["Name","Category","Unit","SellingPrice","CostPrice","GST","HSN","Stock","MinStockAlert","SellInFraction","Barcode"];
     const rows = filtered.map((p) => [
       p.name, p.category, p.unit, p.sellingPrice, p.costPrice,
-      p.gst, p.stock, p.minStockAlert, p.sellInFraction, p.barcode || ""
+      p.gst, p.hsn || "", p.stock, p.minStockAlert, p.sellInFraction, p.barcode || ""
     ]);
     const csv = [headers, ...rows].map((r) => r.join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
@@ -175,6 +176,7 @@ export default function Products() {
           sellingPrice: parseFloat(row.SellingPrice) || 0,
           costPrice: parseFloat(row.CostPrice) || 0,
           gst: (row.GST as GSTRate) || "none",
+          hsn: row.HSN || "",
           stock: parseFloat(row.Stock) || 0,
           minStockAlert: parseFloat(row.MinStockAlert) || 0,
           sellInFraction: row.SellInFraction === "true",
@@ -183,7 +185,7 @@ export default function Products() {
           createdAt: new Date().toISOString(),
         });
       }
-      fetchProducts(); alert(`Imported ${rows.length} products`);
+      //fetchProducts(); alert(`Imported ${rows.length} products`);
     };
     reader.readAsText(file);
     e.target.value = "";
@@ -306,6 +308,7 @@ export default function Products() {
                 <th className="px-5 py-4">Unit</th>
                 <th className="px-5 py-4">Sell Price</th>
                 {isAdmin && <th className="px-5 py-4">Cost Price</th>}
+                <th className="px-5 py-4">HSN</th>
                 <th className="px-5 py-4">GST</th>
                 <th className="px-5 py-4">Stock</th>
                 <th className="px-5 py-4">Slabs</th>
@@ -334,6 +337,9 @@ export default function Products() {
                       {isAdmin && margin(product) && <span className="text-[10px] text-green-500 ml-1">+{margin(product)}%</span>}
                     </td>
                     {isAdmin && <td className="px-5 py-4 text-gray-500">₹{product.costPrice}</td>}
+                    <td className="px-5 py-4 text-gray-500 text-xs">
+  {product.hsn || "—"}
+</td>
                     <td className="px-5 py-4">
                       {product.gst === "none"
                         ? <span className="text-gray-400 text-xs">No GST</span>
@@ -449,6 +455,17 @@ export default function Products() {
                     ({(((form.sellingPrice - form.costPrice) / form.costPrice) * 100).toFixed(1)}%)
                   </div>
                 )}
+                <Field label="HSN Code (Optional)">
+  <input
+    value={form.hsn || ""}
+    onChange={(e) => setForm({ ...form, hsn: e.target.value })}
+    placeholder="e.g. 1006 (for rice)"
+    className={inputCls}
+  />
+  <p className="text-xs text-gray-400 mt-1">
+    Harmonised System of Nomenclature code for GST invoicing
+  </p>
+</Field>
                 <Field label="GST Rate *">
                   <div className="flex flex-wrap gap-2">
                     {GST_RATES.map((g) => (

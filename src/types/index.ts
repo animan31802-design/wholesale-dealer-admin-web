@@ -68,6 +68,7 @@ export interface Product {
   sellInFraction: boolean;
   priceSlabs: PriceSlab[];
   barcode?: string;
+  hsn?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -125,4 +126,6 @@ export interface Order {
   cancelledBy?: string;
   cancelledByName?: string;
   cancellationReason?: string;
+  regionId?: string;
+  regionName?: string;
 }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { signInWithEmailAndPassword } from "firebase/auth";
+import { signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import { auth, db } from "../firebase/config";
@@ -11,27 +11,24 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const { setUser } = useAuthStore();
+  const { logout } = useAuthStore();
   const navigate = useNavigate();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError("");
     setLoading(true);
     try {
       const result = await signInWithEmailAndPassword(auth, email, password);
+      // Validate role before navigating
       const userDoc = await getDoc(doc(db, "users", result.user.uid));
-      if (!userDoc.exists()) {
-        setError("User not found in system. Contact admin.");
-        return;
-      }
+      if (!userDoc.exists()) { setError("User not found."); return; }
       const userData = userDoc.data() as AppUser;
       if (userData.role !== "admin" && userData.role !== "packing_staff") {
-        setError("Access denied. Only admin and packing staff can use this dashboard.");
+        await signOut(auth); // <-- sign them out if role is wrong!
+        setError("Access denied.");
         return;
       }
-      setUser(userData);
-      // Packing staff go directly to packing view
+      // Don't setUser here — App.tsx onAuthStateChanged handles it
       navigate(userData.role === "packing_staff" ? "/orders" : "/");
     } catch {
       setError("Invalid email or password.");

@@ -52,6 +52,8 @@ function OpsRoute({ children }: { children: React.ReactNode }) {
 export default function App() {
   const { setUser, setLoading } = useAuthStore();
 
+  const { logout } = useAuthStore();
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
@@ -59,10 +61,10 @@ export default function App() {
         if (userDoc.exists()) {
           setUser(userDoc.data() as AppUser);
         } else {
-          setUser(null);
+          logout();
         }
       } else {
-        setUser(null);
+        logout();
       }
       setLoading(false);
     });

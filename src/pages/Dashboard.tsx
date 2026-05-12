@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { collection, onSnapshot, query, orderBy } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Order, Product } from "../types";
+import React from "react";
 
 interface Stats {
   todayOrders: number;
@@ -167,15 +168,15 @@ export default function Dashboard() {
           { label: "Out for Delivery", count: stats.outForDelivery, color: "bg-purple-100 text-purple-700"},
           { label: "Delivered",      count: stats.delivered,      color: "bg-green-100 text-green-700"  },
         ].map((f, i, arr) => (
-          <>
-            <div key={f.label} className={`flex-1 rounded-xl p-4 ${f.color}`}>
+          <React.Fragment key={f.label}>
+            <div className={`flex-1 rounded-xl p-4 ${f.color}`}>
               <p className="text-2xl font-bold">{f.count}</p>
               <p className="text-xs font-medium opacity-80 mt-0.5">{f.label}</p>
             </div>
             {i < arr.length - 1 && (
-              <div key={`arrow-${i}`} className="flex items-center text-gray-300 text-xl">→</div>
+              <div className="flex items-center text-gray-300 text-xl">→</div>
             )}
-          </>
+          </React.Fragment>
         ))}
       </div>
 
