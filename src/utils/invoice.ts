@@ -1,8 +1,31 @@
 import jsPDF from "jspdf";
-import { doc, getDoc, runTransaction } from "firebase/firestore";
+import { doc, getDoc, runTransaction, collection, getDocs } from "firebase/firestore";
 import { db } from "../firebase/config";
-import { Order, Customer, InvoiceType, BillingMode } from "../types";
+import { Order, Customer, InvoiceType, BillingMode, OrderItem, Product } from "../types";
 import { BusinessSettings } from "../pages/Settings";
+
+// Enriches order items with hsn, gst, taxInclusive from the products collection.
+// Needed because the mobile app may not save these fields on order creation.
+async function enrichItemsFromProducts(items: OrderItem[]): Promise<OrderItem[]> {
+  try {
+    const snap = await getDocs(collection(db, "products"));
+    const productMap = new Map<string, Product>();
+    snap.docs.forEach((d) => productMap.set(d.id, { id: d.id, ...d.data() } as Product));
+
+    return items.map((item) => {
+      const product = productMap.get(item.productId);
+      if (!product) return item;
+      return {
+        ...item,
+        hsn:          item.hsn          || product.hsn          || "",
+        gst:          item.gst          || (product.gst !== "none" ? product.gst : "0"),
+        taxInclusive: item.taxInclusive ?? product.taxInclusive ?? false,
+      };
+    });
+  } catch {
+    return items;
+  }
+}
 
 export interface InvoiceOptions {
   invoiceType: InvoiceType;
@@ -41,6 +64,10 @@ export async function buildInvoicePDF(
   customer?: Partial<Customer>,
   options?: Partial<InvoiceOptions>
 ) {
+  // Enrich items with hsn, gst, taxInclusive from products (in case mobile app didn't save them)
+  const enrichedItems = await enrichItemsFromProducts(order.items);
+  const enrichedOrder = { ...order, items: enrichedItems };
+
   const biz = await fetchBusinessSettings();
   const invoiceType: InvoiceType =
     options?.invoiceType ?? biz?.defaultInvoiceType ?? "estimate";
@@ -176,20 +203,36 @@ export async function buildInvoicePDF(
 
   let subtotal = 0, totalCGST = 0, totalSGST = 0;
 
-  order.items.forEach((item, i) => {
+  enrichedOrder.items.forEach((item, i) => {
     if (i % 2 === 0) {
       pdf.setFillColor(250, 250, 250);
       pdf.rect(M, y - 3, W - M * 2, 8, "F");
     }
-    const gstRate = parseFloat(item.gst ?? "0") || 0;
-    const cgstRate = gstRate / 2;
-    const base = isGST && gstRate > 0 ? item.price / (1 + gstRate / 100) : item.price;
-    const lineBase = base * item.quantity;
-    const lineCGST = isGST ? (lineBase * cgstRate) / 100 : 0;
-    const lineSGST = lineCGST;
-    subtotal   += lineBase;
-    totalCGST  += lineCGST;
-    totalSGST  += lineSGST;
+    const gstRate     = parseFloat(item.gst ?? "0") || 0;
+    const cgstRate    = gstRate / 2;
+    const isInclusive = item.taxInclusive === true;
+
+    // Taxable base per unit:
+    //   Exclusive → price is already pre-tax, base = price
+    //   Inclusive → tax is baked into price, extract it: base = price / (1 + gst/100)
+    const basePerUnit = isGST && gstRate > 0 && isInclusive
+      ? item.price / (1 + gstRate / 100)
+      : item.price;
+
+    const lineBase  = basePerUnit * item.quantity;
+    const lineCGST  = isGST && gstRate > 0 ? (lineBase * cgstRate) / 100 : 0;
+    const lineSGST  = lineCGST;
+
+    // Line total on invoice:
+    //   Exclusive → base + CGST + SGST (price × qty + tax on top)
+    //   Inclusive → selling price × qty (tax already inside, total stays the same)
+    const lineTotal = isGST && gstRate > 0
+      ? (isInclusive ? item.price * item.quantity : lineBase + lineCGST + lineSGST)
+      : item.total;
+
+    subtotal  += lineBase;
+    totalCGST += lineCGST;
+    totalSGST += lineSGST;
 
     pdf.setFontSize(8);
     pdf.text(String(i + 1),   col.no + 1, y + 2);
@@ -205,7 +248,7 @@ export async function buildInvoicePDF(
       pdf.text(lineCGST > 0 ? lineCGST.toFixed(2) : "-", col.cgst, y + 2, { align: "right" });
       pdf.text(lineSGST > 0 ? lineSGST.toFixed(2) : "-", col.sgst, y + 2, { align: "right" });
     }
-    pdf.text(item.total.toFixed(2), col.total, y + 2, { align: "right" });
+    pdf.text(lineTotal.toFixed(2), col.total, y + 2, { align: "right" });
     y += 8;
   });
 
@@ -225,6 +268,10 @@ export async function buildInvoicePDF(
     y += 6;
   };
 
+  // Recompute grand total from enriched line totals — don't trust order.totalAmount
+  // (mobile app saves base price only, without GST added)
+  const computedTotal = isGST ? subtotal + totalCGST + totalSGST : subtotal;
+
   if (isGST) {
     addRow("Taxable Amount:", `Rs.${subtotal.toFixed(2)}`);
     addRow("CGST:",           `Rs.${totalCGST.toFixed(2)}`);
@@ -233,7 +280,7 @@ export async function buildInvoicePDF(
     pdf.line(tX, y, vX, y);
     y += 4;
   }
-  addRow("Current Bill Total:", `Rs.${order.totalAmount.toFixed(2)}`, true, [20, 20, 20]);
+  addRow("Current Bill Total:", `Rs.${computedTotal.toFixed(2)}`, true, [20, 20, 20]);
 
   if (showDue && due > 0) {
     y += 2;
@@ -241,13 +288,13 @@ export async function buildInvoicePDF(
     pdf.setDrawColor(200);
     pdf.line(tX, y, vX, y);
     y += 4;
-    addRow("Grand Total Payable:", `Rs.${(order.totalAmount + due).toFixed(2)}`, true, [180, 50, 20]);
+    addRow("Grand Total Payable:", `Rs.${(computedTotal + due).toFixed(2)}`, true, [180, 50, 20]);
   }
 
   if (order.amountCollected !== undefined) {
     y += 2;
     addRow("Amount Collected:", `Rs.${order.amountCollected.toFixed(2)}`, false, [20, 130, 60]);
-    const bal = order.totalAmount - order.amountCollected + (showDue ? due : 0);
+    const bal = computedTotal - order.amountCollected + (showDue ? due : 0);
     if (bal > 0) {
       addRow("Balance Due:", `Rs.${bal.toFixed(2)}`, true, [180, 50, 20]);
     }

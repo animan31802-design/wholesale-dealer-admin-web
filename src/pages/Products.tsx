@@ -26,7 +26,7 @@ const emptyProduct = (): Product => ({
   sellingPrice: 0, costPrice: 0, gst: "none",
   trackInventory: true, stock: 0, minStockAlert: 0,
   safetyBuffer: { type: "fixed", value: 0 },
-  sellInFraction: false, priceSlabs: [], barcode: "", hsn: "",
+  sellInFraction: false, priceSlabs: [], barcode: "", hsn: "", taxInclusive: false,
 });
 
 export default function Products() {
@@ -343,7 +343,12 @@ export default function Products() {
                     <td className="px-5 py-4">
                       {product.gst === "none"
                         ? <span className="text-gray-400 text-xs">No GST</span>
-                        : <span className="bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded-full">{product.gst}%</span>}
+                        : <div className="flex flex-col gap-0.5">
+                            <span className="bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded-full w-fit">{product.gst}%</span>
+                            <span className={`text-xs ${product.taxInclusive ? "text-blue-500" : "text-gray-400"}`}>
+                              {product.taxInclusive ? "incl." : "excl."}
+                            </span>
+                          </div>}
                     </td>
                     <td className="px-5 py-4">
                       {product.trackInventory ? (
@@ -476,6 +481,27 @@ export default function Products() {
                     ))}
                   </div>
                 </Field>
+
+                {form.gst !== "none" && (
+                  <div className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-xl px-4 py-3">
+                    <div>
+                      <p className="text-sm font-medium text-gray-700">Tax Inclusive Price</p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        {form.taxInclusive
+                          ? `Selling price ₹${form.sellingPrice} already includes GST — taxable base = ₹${form.sellingPrice > 0 ? (form.sellingPrice / (1 + parseFloat(form.gst) / 100)).toFixed(2) : "0.00"}`
+                          : `Selling price ₹${form.sellingPrice} + ${form.gst}% GST = ₹${form.sellingPrice > 0 ? (form.sellingPrice * (1 + parseFloat(form.gst) / 100)).toFixed(2) : "0.00"} on bill`}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form, taxInclusive: !form.taxInclusive })}
+                      className={`relative w-12 h-6 rounded-full transition-colors flex-shrink-0 ${form.taxInclusive ? "bg-orange-500" : "bg-gray-300"}`}
+                    >
+                      <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${form.taxInclusive ? "translate-x-6" : "translate-x-0.5"}`} />
+                    </button>
+                  </div>
+                )}
+
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <label className="text-sm font-medium text-gray-700">Quantity Price Slabs</label>

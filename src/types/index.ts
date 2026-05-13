@@ -69,6 +69,7 @@ export interface Product {
   priceSlabs: PriceSlab[];
   barcode?: string;
   hsn?: string;
+  taxInclusive?: boolean;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -82,6 +83,7 @@ export interface OrderItem {
   total: number;
   hsn?: string;
   gst?: string;
+  taxInclusive?: boolean;
 }
 
 export type OrderStatus =
