@@ -30,6 +30,26 @@ function gstRate(p: Product): number {
   return p.gst === "none" || !p.gst ? 0 : parseFloat(p.gst);
 }
 
+// For a given selling price and product, compute:
+//   taxableBase  — the pre-tax amount per unit
+//   gstPerUnit   — the GST component per unit
+//   billedPrice  — what actually appears on the bill per unit
+//                  (= sellingPrice for exclusive; same sellingPrice for inclusive)
+function gstBreakdown(price: number, gstPct: number, inclusive: boolean) {
+  if (gstPct === 0) return { taxableBase: price, gstPerUnit: 0, billedPrice: price };
+  if (inclusive) {
+    // Price already contains GST — extract it
+    // taxableBase = price / (1 + rate/100)
+    const taxableBase = price / (1 + gstPct / 100);
+    const gstPerUnit  = price - taxableBase;           // GST component inside the price
+    return { taxableBase: round2(taxableBase), gstPerUnit: round2(gstPerUnit), billedPrice: price };
+  } else {
+    // Price is pre-tax — add GST on top
+    const gstPerUnit = price * gstPct / 100;
+    return { taxableBase: price, gstPerUnit: round2(gstPerUnit), billedPrice: round2(price + gstPerUnit) };
+  }
+}
+
 function fmtPrice(v: number): string { return Number(v).toFixed(2); }
 function fmtQty(v: number): string   { return Number.isInteger(v) ? String(v) : v.toFixed(2); }
 function round2(v: number): number   { return Math.round(v * 100) / 100; }
@@ -164,11 +184,17 @@ function ProductRow({
   const outOfStock  = product.trackInventory && avail <= 0;
   const atLimit     = product.trackInventory && qtyInCart >= avail;
   const lowStock    = product.trackInventory && avail <= product.minStockAlert && avail > 0;
-  const gst         = gstRate(product);
+  const gstPct       = gstRate(product);
+  const inclusive    = product.taxInclusive === true;
   const displayPrice = getSlabPrice(product, Math.max(qtyInCart, 1));
   const activePrice  = qtyInCart > 0 ? getSlabPrice(product, qtyInCart) : null;
+  // lineTotal = sum of selling prices (the price customer sees on product row)
   const lineTotal    = activePrice ? activePrice * qtyInCart : 0;
-  const gstAmt       = lineTotal * gst / 100;
+  // For inclusive: GST is already inside lineTotal; for exclusive: add on top
+  const bd           = activePrice ? gstBreakdown(activePrice, gstPct, inclusive) : null;
+  const gstAmt       = bd ? round2(bd.gstPerUnit * qtyInCart) : 0;
+  // billTotal = what customer actually pays for this line
+  const billTotal    = bd ? round2(bd.billedPrice * qtyInCart) : 0;
 
   return (
     <div className="flex items-center gap-3 py-3 border-b border-gray-100 last:border-0">
@@ -177,9 +203,15 @@ function ProductRow({
         <p className="font-medium text-sm text-gray-800 mb-0.5 truncate">{product.name}</p>
         <p className={`text-xs ${lowStock ? "text-red-500" : "text-gray-400"}`}>
           ₹{fmtPrice(displayPrice)} / {product.unit}
+          {gstPct > 0 && (
+            <span className="text-gray-400">
+              {inclusive
+                ? ` (incl. ${gstPct}% GST)`
+                : ` + ${gstPct}% GST`}
+            </span>
+          )}
           {" · "}
           {product.trackInventory ? `Stock: ${fmtQty(avail)}` : "Stock: ∞"}
-          {gst > 0 && ` · GST ${gst}%`}
         </p>
 
         {/* Active slab price hint */}
@@ -221,7 +253,11 @@ function ProductRow({
             </button>
           </div>
           <p className="text-xs font-semibold text-orange-600">
-            {gst > 0 ? `${fmtRupees(lineTotal + gstAmt)} incl. GST` : fmtRupees(lineTotal)}
+            {gstPct > 0
+              ? inclusive
+                ? `${fmtRupees(lineTotal)} (tax incl.)`           // price already has GST
+                : `${fmtRupees(billTotal)} incl. GST`             // price + GST added on top
+              : fmtRupees(lineTotal)}
           </p>
         </div>
       ) : (
@@ -243,8 +279,15 @@ function CartItemRow({
   onDecrease: () => void; onIncrease: () => void;
   onRemove: () => void; onQtyTapped: () => void;
 }) {
-  const gstPct = parseFloat(item.gst ?? "0") || 0;
-  const gstAmt = item.total * gstPct / 100;
+  const gstPct    = parseFloat(item.gst ?? "0") || 0;
+  const inclusive = item.taxInclusive === true;
+  // re-use the same breakdown logic
+  const cbd       = gstPct > 0 ? gstBreakdown(item.price, gstPct, inclusive) : null;
+  const gstAmt    = cbd ? round2(cbd.gstPerUnit * item.quantity) : 0;
+  // billedLineTotal: for exclusive = price*qty + gst; for inclusive = price*qty (already contains gst)
+  const billedLineTotal = cbd
+    ? round2(cbd.billedPrice * item.quantity)
+    : item.total;
 
   return (
     <div className="bg-white rounded-xl border border-gray-100 p-4 mb-2 shadow-sm">
@@ -255,11 +298,18 @@ function CartItemRow({
             {item.productName}
           </p>
           <p className="text-xs text-gray-400">
-            ₹{fmtPrice(item.price)} × {fmtQty(item.quantity)} {item.unit} = ₹{fmtPrice(item.total)}
+            ₹{fmtPrice(item.price)} × {fmtQty(item.quantity)} {item.unit}
+            {" = "}
+            {gstPct > 0 && !inclusive
+              ? <><span className="line-through text-gray-300">₹{fmtPrice(item.total)}</span>{" "}₹{fmtPrice(billedLineTotal)}</>
+              : <>₹{fmtPrice(billedLineTotal)}</>
+            }
           </p>
           {gstAmt > 0 && (
-            <p className="text-xs text-gray-300 mt-0.5">
-              GST {item.gst}% = ₹{fmtPrice(gstAmt)}
+            <p className="text-xs text-gray-400 mt-0.5">
+              {inclusive
+                ? `GST ${gstPct}% incl. = ₹${fmtPrice(gstAmt)} (taxable base ₹${fmtPrice(round2(item.price / (1 + gstPct / 100) * item.quantity))})`
+                : `+ GST ${gstPct}% = ₹${fmtPrice(gstAmt)}`}
             </p>
           )}
         </div>
@@ -411,30 +461,63 @@ export default function CreateOrderPage() {
     return products
       .filter((p) => (cartQty[p.id!] ?? 0) > 0)
       .map((p) => {
-        const qty   = cartQty[p.id!];
-        const price = getSlabPrice(p, qty);
-        const total = price * qty;
-        const gst   = p.gst === "none" ? undefined : p.gst;
-        return {
-          productId:    p.id!,
-          productName:  p.name,
-          price,
-          unit:         p.unit,
-          quantity:     qty,
-          total,
-          hsn:          p.hsn,
-          gst,
-          taxInclusive: p.taxInclusive,
-        } as OrderItem;
+        const qty       = cartQty[p.id!];
+        const price     = getSlabPrice(p, qty);           // selling price per unit (as entered)
+        const gstPct    = gstRate(p);
+        const inclusive = p.taxInclusive === true;
+        const bd        = gstPct > 0 ? gstBreakdown(price, gstPct, inclusive) : null;
+
+        // total = what the customer actually pays for this line
+        //   inclusive: price * qty  (GST already inside)
+        //   exclusive: (price + gstPerUnit) * qty
+        const total     = bd ? round2(bd.billedPrice * qty) : round2(price * qty);
+
+        const item: OrderItem = {
+          productId:   p.id!,
+          productName: p.name,
+          price,          // selling price per unit (pre-addition for exclusive; inclusive as-is)
+          unit:        p.unit,
+          quantity:    qty,
+          total,          // billed line total (customer pays this)
+        };
+        if (p.gst && p.gst !== "none") item.gst          = p.gst;
+        if (p.hsn)                      item.hsn          = p.hsn;
+        if (inclusive)                  item.taxInclusive = true;
+        return item;
       });
   }, [cartQty, products]);
 
-  const itemsTotal = useMemo(() => billItems.reduce((s, i) => s + i.total, 0), [billItems]);
-  const gstTotal   = useMemo(() =>
-    billItems.reduce((s, i) => s + i.total * (parseFloat(i.gst ?? "0") || 0) / 100, 0),
+  // itemsTotal = sum of pre-tax amounts (taxable base across all items)
+  const itemsTotal = useMemo(() =>
+    billItems.reduce((s, i) => {
+      const gstPct    = parseFloat(i.gst ?? "0") || 0;
+      const inclusive = i.taxInclusive === true;
+      if (gstPct === 0 || !inclusive) {
+        // exclusive: total already = price*qty (pre-tax); no-gst: same
+        return s + round2(i.price * i.quantity);
+      } else {
+        // inclusive: extract taxable base from total
+        return s + round2(i.price / (1 + gstPct / 100) * i.quantity);
+      }
+    }, 0),
     [billItems]
   );
-  const grandTotal = useMemo(() => itemsTotal + gstTotal, [itemsTotal, gstTotal]);
+  const gstTotal   = useMemo(() =>
+    // Re-derive GST amounts correctly for both inclusive and exclusive
+    billItems.reduce((s, i) => {
+      const gstPct    = parseFloat(i.gst ?? "0") || 0;
+      if (gstPct === 0) return s;
+      const inclusive = i.taxInclusive === true;
+      const bd        = gstBreakdown(i.price, gstPct, inclusive);
+      return s + round2(bd.gstPerUnit * i.quantity);
+    }, 0),
+    [billItems]
+  );
+  // grandTotal = what customer actually pays = sum of all billedLineTotals
+  const grandTotal = useMemo(() =>
+    billItems.reduce((s, i) => s + i.total, 0),
+    [billItems]
+  );
   const prevBalance = customer?.outstandingDue ?? 0;
   const totalOwed  = useMemo(() => grandTotal + prevBalance, [grandTotal, prevBalance]);
   const cartCount  = useMemo(() => Object.values(cartQty).reduce((s, v) => s + v, 0), [cartQty]);
@@ -472,10 +555,13 @@ export default function CreateOrderPage() {
   const handleSaveOrder = async () => {
     if (!customer || !user) return;
     if (billItems.length === 0) { setMessage("Add at least one product"); return; }
-    const paid = parseFloat(paidAmount);
-    if (isNaN(paid))    { setMessage("Enter a valid paid amount"); return; }
-    if (paid < 0)        { setMessage("Amount cannot be negative"); return; }
-    if (paid > totalOwed + 0.01) { setMessage("Amount exceeds total payable"); return; }
+
+    // Payment is optional — treat empty/blank as ₹0 (pay on delivery)
+    const rawPaid = paidAmount.trim();
+    const paid    = rawPaid === "" ? 0 : parseFloat(rawPaid);
+    if (isNaN(paid))             { setMessage("Enter a valid advance amount"); return; }
+    if (paid < 0)                { setMessage("Advance amount cannot be negative"); return; }
+    if (paid > totalOwed + 0.01) { setMessage("Advance exceeds total payable"); return; }
 
     setIsSaving(true);
     setMessage("");
@@ -484,7 +570,7 @@ export default function CreateOrderPage() {
       let newOrderId = "";
 
       await runTransaction(db, async (t) => {
-        // ── READ PHASE: verify stock live ─────────────────────────
+        // ── READ PHASE: verify live stock ─────────────────────────
         const productRefs  = billItems.map((item) => doc(db, "products", item.productId));
         const productSnaps = await Promise.all(productRefs.map((ref) => t.get(ref)));
 
@@ -500,7 +586,7 @@ export default function CreateOrderPage() {
         });
 
         // ── WRITE PHASE ───────────────────────────────────────────
-        // Reserve stock
+        // Reserve stock on each tracked product
         productSnaps.forEach((snap, i) => {
           const data = snap.data() as Product;
           if (!data.trackInventory) return;
@@ -509,32 +595,57 @@ export default function CreateOrderPage() {
           });
         });
 
-        // Build order doc
-        const orderPayload: Omit<Order, "id"> = {
+        // Strip undefined from bill items (hsn, gst, taxInclusive may be undefined)
+        const cleanItems = billItems.map((item) => {
+          const clean: Record<string, unknown> = {
+            productId:   item.productId,
+            productName: item.productName,
+            price:       item.price,
+            unit:        item.unit,
+            quantity:    item.quantity,
+            total:       item.total,
+          };
+          if (item.gst)          clean.gst          = item.gst;
+          if (item.hsn)          clean.hsn          = item.hsn;
+          if (item.taxInclusive) clean.taxInclusive = item.taxInclusive;
+          return clean;
+        });
+
+        // Build order payload — never set a key to undefined in Firestore
+        const orderPayload: Record<string, unknown> = {
           customerId:      customer.id!,
           customerName:    customer.shopName,
-          customerAddress: customer.address,
-          customerPhone:   customer.phone,
-          customerLat:     customer.lat,
-          customerLng:     customer.lng,
+          customerAddress: customer.address ?? "",
+          customerPhone:   customer.phone ?? "",
           agentId:         user.uid,
           agentName:       user.name,
-          regionId:        customer.regionId,
-          regionName:      customer.regionName,
-          items:           billItems,
-          totalAmount:     round2(totalOwed),
-          status:          "pending",
+          regionId:        customer.regionId ?? "",
+          regionName:      customer.regionName ?? "",
+          items:           cleanItems,
+          // totalAmount = order value only (without prevBalance, which is tracked separately)
+          totalAmount:     round2(grandTotal),
+          // advancePaid = what was collected at order creation (can be 0)
+          advancePaid:     paid,
+          // balanceDue = what still needs to be collected on delivery
+          balanceDue:      round2(grandTotal - paid),
+          // amountCollected is set by delivery agent on delivery; default to advance paid
           amountCollected: paid,
-          paymentMode,
-          notes:           notes.trim() || undefined,
+          paymentMode:     paid > 0 ? paymentMode : "pending",
+          status:          "pending",
           createdAt:       new Date().toISOString(),
         };
+
+        // Optional fields — only add if they have a real value (never undefined)
+        if (customer.lat != null)            orderPayload.customerLat  = customer.lat;
+        if (customer.lng != null)            orderPayload.customerLng  = customer.lng;
+        if (notes.trim())                    orderPayload.notes        = notes.trim();
+        if (customer.gstin)                  orderPayload.customerGstin = customer.gstin;
 
         const orderRef = doc(collection(db, "orders"));
         newOrderId     = orderRef.id;
         t.set(orderRef, orderPayload);
 
-        // Update customer outstanding due
+        // Update customer outstanding due (prevBalance + orderTotal − advancePaid)
         const newDue = round2(prevBalance + grandTotal - paid);
         t.update(doc(db, "customers", customer.id!), { outstandingDue: newDue });
       });
@@ -909,30 +1020,42 @@ export default function CreateOrderPage() {
 
               {/* Summary card */}
               <div className="bg-white rounded-xl border border-gray-100 p-4 mb-3 shadow-sm">
-                <div className="flex justify-between text-sm text-gray-500 mb-2">
-                  <span>Items total</span>
+                {/* Taxable base */}
+                <div className="flex justify-between text-sm text-gray-500 mb-1.5">
+                  <span>Taxable amount</span>
                   <span>₹{fmtPrice(itemsTotal)}</span>
                 </div>
+                {/* GST row — shown for both inclusive and exclusive */}
                 {gstTotal > 0 && (
-                  <div className="flex justify-between text-sm text-gray-400 mb-2">
-                    <span>GST</span>
+                  <div className="flex justify-between text-sm text-gray-400 mb-1.5">
+                    <span>
+                      GST
+                      {/* if any item is inclusive, note it */}
+                      {billItems.some(i => i.taxInclusive) && " (incl. in price)"}
+                    </span>
                     <span>₹{fmtPrice(gstTotal)}</span>
                   </div>
                 )}
-                {prevBalance > 0 && (
-                  <div className="flex justify-between text-sm text-red-500 mb-2">
-                    <span>Previous balance</span>
-                    <span>₹{fmtPrice(prevBalance)}</span>
-                  </div>
-                )}
                 <div className="border-t border-gray-100 mt-2 pt-2 flex justify-between font-bold text-gray-800 text-base">
-                  <span>Total payable</span>
-                  <span>₹{fmtPrice(totalOwed)}</span>
+                  <span>Order total</span>
+                  <span>₹{fmtPrice(grandTotal)}</span>
                 </div>
+                {prevBalance > 0 && (
+                  <>
+                    <div className="flex justify-between text-sm text-red-500 mt-2">
+                      <span>Previous outstanding</span>
+                      <span>₹{fmtPrice(prevBalance)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm font-semibold text-red-600 mt-1 pt-1 border-t border-red-100">
+                      <span>Total due (incl. outstanding)</span>
+                      <span>₹{fmtPrice(totalOwed)}</span>
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Notes */}
-              <div className="mb-3">
+              <div className="mb-4">
                 <label className="block text-xs font-medium text-gray-500 mb-1.5">Notes (optional)</label>
                 <textarea
                   value={notes}
@@ -943,44 +1066,68 @@ export default function CreateOrderPage() {
                 />
               </div>
 
-              {/* Paid amount */}
-              <div className="mb-2">
-                <label className="block text-xs font-medium text-gray-500 mb-1.5">Amount paid (₹)</label>
+              {/* Advance payment section */}
+              <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <p className="text-sm font-semibold text-blue-800">Advance Payment</p>
+                    <p className="text-xs text-blue-500 mt-0.5">Leave blank to collect full amount on delivery</p>
+                  </div>
+                  {paidAmount && parseFloat(paidAmount) > 0 && (
+                    <div className="text-right">
+                      <p className="text-xs text-blue-500">Balance on delivery</p>
+                      <p className="text-sm font-bold text-orange-600">
+                        ₹{fmtPrice(Math.max(0, round2(grandTotal - (parseFloat(paidAmount) || 0))))}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
                 <input
                   type="number" min="0" step="0.01"
                   value={paidAmount}
                   onChange={(e) => { setPaidAmount(e.target.value); setMessage(""); }}
-                  placeholder="0.00"
-                  className="w-full border border-gray-200 rounded-xl px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-orange-300"
+                  placeholder="0.00 (optional — leave blank for pay on delivery)"
+                  className="w-full border border-blue-200 rounded-xl px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white mb-2"
                 />
-              </div>
 
-              {/* Quick amount chips */}
-              <div className="flex gap-2 mb-3 flex-wrap">
-                {paymentSuggestions.map((amt, i) => (
-                  <button key={i}
-                    onClick={() => { setPaidAmount(String(amt)); setMessage(""); }}
-                    className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-gray-50 hover:bg-orange-50 hover:border-orange-300 transition-all">
-                    {i === 0 ? `Full ₹${fmtPrice(amt)}` : `₹${fmtPrice(amt)}`}
-                  </button>
-                ))}
-              </div>
-
-              {/* Payment mode */}
-              <div className="mb-4">
-                <label className="block text-xs font-medium text-gray-500 mb-1.5">Payment mode</label>
-                <div className="flex gap-2">
-                  {(["cash", "upi", "bank", "credit"] as const).map((m) => (
-                    <button key={m} onClick={() => setPaymentMode(m)}
-                      className={`flex-1 py-2 rounded-lg text-xs font-medium border capitalize transition-all ${
-                        paymentMode === m
-                          ? "bg-orange-500 text-white border-orange-500"
-                          : "bg-white text-gray-500 border-gray-200 hover:border-gray-300"
-                      }`}>
-                      {m}
+                {/* Quick chips — only shown when amount > 0 */}
+                {grandTotal > 0 && (
+                  <div className="flex gap-2 flex-wrap">
+                    <button
+                      onClick={() => { setPaidAmount(""); setMessage(""); }}
+                      className={"px-3 py-1.5 border rounded-lg text-xs transition-all " + (!paidAmount ? "bg-blue-600 text-white border-blue-600" : "bg-white text-gray-500 border-gray-200 hover:border-blue-300")}
+                    >
+                      Pay on delivery
                     </button>
-                  ))}
-                </div>
+                    {paymentSuggestions.map((amt, i) => (
+                      <button key={i}
+                        onClick={() => { setPaidAmount(String(amt)); setMessage(""); }}
+                        className={"px-3 py-1.5 border rounded-lg text-xs transition-all " + (parseFloat(paidAmount) === amt ? "bg-blue-600 text-white border-blue-600" : "bg-white text-gray-500 border-gray-200 hover:border-blue-300")}>
+                        {i === 0 ? `Full ₹${fmtPrice(amt)}` : `₹${fmtPrice(amt)}`}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Payment mode — only relevant when advance > 0 */}
+                {paidAmount && parseFloat(paidAmount) > 0 && (
+                  <div className="mt-3">
+                    <p className="text-xs text-blue-600 font-medium mb-1.5">Payment method for advance</p>
+                    <div className="flex gap-2">
+                      {(["cash", "upi", "bank", "credit"] as const).map((m) => (
+                        <button key={m} onClick={() => setPaymentMode(m)}
+                          className={`flex-1 py-1.5 rounded-lg text-xs font-medium border capitalize transition-all ${
+                            paymentMode === m
+                              ? "bg-orange-500 text-white border-orange-500"
+                              : "bg-white text-gray-500 border-gray-200 hover:border-gray-300"
+                          }`}>
+                          {m}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Place order button */}

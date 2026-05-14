@@ -5,13 +5,17 @@ import { useAuthStore } from "../store/authStore";
 
 // Admin sees everything
 const adminNavItems = [
-  { path: "/",               label: "Dashboard",     icon: "📊" },
-  { path: "/orders",         label: "Orders",        icon: "📦" },
-  { path: "/create-order",   label: "Create Order",  icon: "➕" },
-  { path: "/packing",        label: "Packing View",  icon: "📋" },
-  { path: "/products",       label: "Products",      icon: "🛒" },
-  { path: "/customers",      label: "Customers",     icon: "🏪" },
-  { path: "/users",          label: "Users",         icon: "👥" },
+  { path: "/",                    label: "Dashboard",     icon: "📊" },
+  { path: "/orders",              label: "Orders",        icon: "📦" },
+  { path: "/create-order",        label: "Create Order",  icon: "➕" },
+  { path: "/packing",             label: "Packing View",  icon: "📋" },
+  { path: "/products",            label: "Products",      icon: "🛒" },
+  { path: "/customers",           label: "Customers",     icon: "🏪" },
+  { path: "/users",               label: "Users",         icon: "👥" },
+  { path: "/reports/salesrevenue",       label: "Sales & Revenue", icon: "📦" },
+  { path: "/reports/stock",       label: "Stock Reports", icon: "📦" },
+  { path: "/reports/finance",     label: "Finance Reports", icon: "💰" },
+  { path: "/reports/agent",     label: "Agent Reports", icon: "💰" },
 ];
 
 // Packing staff — no create order access

@@ -576,7 +576,7 @@ function InvoiceModal({ order, onClose }: { order: Order; onClose: () => void })
   const [loadingDue, setLoadingDue]       = useState(false);
   const [generating, setGenerating]       = useState(false);
 
-  // Auto-load full customer data (GSTIN + outstanding due)
+  // Auto-load customer data (GSTIN, outstanding due)
   useEffect(() => {
     if (!order.customerId) return;
     setLoadingDue(true);
@@ -584,8 +584,21 @@ function InvoiceModal({ order, onClose }: { order: Order; onClose: () => void })
       if (snap.exists()) {
         const data = snap.data();
         setCustomerData(data);
-        const due = data.outstandingDue || 0;
-        if (due > 0) { setCustomerDue(String(due)); setBillingMode("with_due"); }
+
+        // ── Derive the TRUE historical due (before this order) ────────────
+        // customer.outstandingDue is updated at order creation:
+        //   newDue = prevDue + orderTotal − advancePaid
+        // So to get prevDue back:
+        //   prevDue = outstandingDue − balanceDue
+        // where balanceDue is stored on the order itself.
+        const currentDue   = data.outstandingDue ?? 0;
+        const orderBalance = (order as any).balanceDue ?? 0;   // saved on the order doc
+        const historicalDue = Math.max(0, Math.round((currentDue - orderBalance) * 100) / 100);
+
+        if (historicalDue > 0) {
+          setCustomerDue(String(historicalDue));
+          setBillingMode("with_due");
+        }
       }
       setLoadingDue(false);
     }).catch(() => setLoadingDue(false));
@@ -673,13 +686,16 @@ function InvoiceModal({ order, onClose }: { order: Order; onClose: () => void })
             {billingMode === "with_due" && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Previous Outstanding (₹)
-                  {loadingDue && <span className="text-xs text-gray-400 ml-2">loading...</span>}
+                  Previous Outstanding before this order (₹)
+                  {loadingDue && <span className="text-xs text-gray-400 ml-2">calculating…</span>}
                 </label>
                 <input type="number" min="0" step="0.01"
                   value={customerDue} onChange={(e) => setCustomerDue(e.target.value)}
-                  placeholder="e.g. 1500"
+                  placeholder="0.00"
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
+                <p className="text-xs text-gray-400 mt-1">
+                  This is the amount the customer owed <em>before</em> this order — not the current balance.
+                </p>
               </div>
             )}
 

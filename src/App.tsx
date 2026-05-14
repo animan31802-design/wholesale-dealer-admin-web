@@ -15,6 +15,10 @@ import Users from "./pages/Users";
 import Settings from "./pages/Settings";
 import PackingStation from "./pages/PackingStation";
 import CreateOrderPage from "./pages/CreateOrderPage";
+import SalesRevenueReports from "./pages/SalesRevenueReports";
+import StockReports from "./pages/StockReports";
+import FinanceReports from "./pages/FinanceReports";
+import AgentReports from "./pages/AgentReports";
 import Layout from "./components/Layout";
 
 // ── Route guards ─────────────────────────────────────────────────
@@ -95,7 +99,13 @@ export default function App() {
           <Route path="packing"       element={<OpsRoute><PackingStation /></OpsRoute>} />
 
           {/* Create order — admin only (admins place orders on behalf of field agents on web) */}
-          <Route path="create-order"  element={<AdminRoute><CreateOrderPage /></AdminRoute>} />
+          <Route path="create-order"     element={<AdminRoute><CreateOrderPage /></AdminRoute>} />
+
+          {/* Reports — admin only */}
+          <Route path="reports/salesrevenue"    element={<AdminRoute><SalesRevenueReports /></AdminRoute>} />
+          <Route path="reports/stock"    element={<AdminRoute><StockReports /></AdminRoute>} />
+          <Route path="reports/finance"  element={<AdminRoute><FinanceReports /></AdminRoute>} />
+          <Route path="reports/agent"  element={<AdminRoute><AgentReports /></AdminRoute>} />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />

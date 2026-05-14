@@ -30,7 +30,7 @@ async function enrichItemsFromProducts(items: OrderItem[]): Promise<OrderItem[]>
 export interface InvoiceOptions {
   invoiceType: InvoiceType;
   billingMode: BillingMode;
-  customerDue?: number;
+  customerDue?: number;   // ONLY true historical due (before this order) — pass 0 if unknown
 }
 
 async function fetchBusinessSettings(): Promise<BusinessSettings | null> {
@@ -64,7 +64,7 @@ export async function buildInvoicePDF(
   customer?: Partial<Customer>,
   options?: Partial<InvoiceOptions>
 ) {
-  // Enrich items with hsn, gst, taxInclusive from products (in case mobile app didn't save them)
+  // Enrich items with hsn, gst, taxInclusive from products
   const enrichedItems = await enrichItemsFromProducts(order.items);
   const enrichedOrder = { ...order, items: enrichedItems };
 
@@ -73,10 +73,36 @@ export async function buildInvoicePDF(
     options?.invoiceType ?? biz?.defaultInvoiceType ?? "estimate";
   const billingMode: BillingMode =
     options?.billingMode ?? biz?.defaultBillingMode ?? "without_due";
-  const due = options?.customerDue ?? (customer as any)?.outstandingDue ?? 0;
-  const isGST = invoiceType === "gst";
-  const showDue = billingMode === "with_due";
-  const prefix = biz?.invoicePrefix || "INV";
+  const isGST    = invoiceType === "gst";
+  const showDue  = billingMode === "with_due";
+  const prefix   = biz?.invoicePrefix || "INV";
+
+  // ── Payment figures ────────────────────────────────────────────────────────
+  // Rule: NEVER use customer.outstandingDue for the invoice.
+  // outstandingDue is updated when the order is placed and already includes the
+  // balance of this order — so using it here would double-count.
+  //
+  // Instead we use the order's own saved fields:
+  //   order.advancePaid  — collected at order creation (may be 0)
+  //   order.balanceDue   — remaining to collect on delivery = orderTotal − advancePaid
+  //
+  // The InvoiceModal's "Previous Due" field (options.customerDue) is for HISTORICAL
+  // outstanding BEFORE this order.  The caller must pass the pre-order outstanding,
+  // not the current customer.outstandingDue.
+
+  // Historical due from BEFORE this order (passed in by InvoiceModal, default 0)
+  const historicalDue: number = (() => {
+    if (options?.customerDue !== undefined) return options.customerDue;
+    // If caller didn't pass it, try to derive it:
+    // pre-order due = current outstandingDue − balanceDue
+    const currentDue    = (customer as any)?.outstandingDue ?? 0;
+    const orderBalance  = (order as any).balanceDue ?? 0;
+    const derived       = currentDue - orderBalance;
+    return Math.max(0, Math.round(derived * 100) / 100);
+  })();
+
+  // Advance paid at order creation
+  const advancePaid: number = (order as any).advancePaid ?? order.amountCollected ?? 0;
 
   const invoiceNumber =
     order.invoiceNumber || (await getNextInvoiceNumber(prefix));
@@ -85,7 +111,7 @@ export async function buildInvoicePDF(
   const W = 210;
   const M = 14;
 
-  // ── Header band ─────────────────────────────────────────────
+  // ── Header band ─────────────────────────────────────────────────────────
   pdf.setFillColor(234, 88, 12);
   pdf.rect(0, 0, W, 30, "F");
 
@@ -136,7 +162,7 @@ export async function buildInvoicePDF(
     { align: "right" }
   );
 
-  // ── Bill to box ──────────────────────────────────────────────
+  // ── Bill to box ──────────────────────────────────────────────────────────
   let y = 38;
   pdf.setFillColor(249, 249, 249);
   pdf.roundedRect(M, y, 90, isGST ? 36 : 30, 2, 2, "F");
@@ -157,7 +183,7 @@ export async function buildInvoicePDF(
   if (isGST && customer?.gstin)
     pdf.text(`GSTIN: ${customer.gstin}`, M + 3, y + 31);
 
-  // order meta right side
+  // Order meta right side
   pdf.setFontSize(8.5);
   pdf.setTextColor(60);
   pdf.setFont("helvetica", "normal");
@@ -166,7 +192,7 @@ export async function buildInvoicePDF(
   if (order.vehicleNumber)
     pdf.text(`Vehicle: ${order.vehicleNumber}`, metaX, y + 12);
 
-  // ── Items table ───────────────────────────────────────────────
+  // ── Items table ──────────────────────────────────────────────────────────
   y = 76;
   const col = {
     no:    M,
@@ -185,17 +211,17 @@ export async function buildInvoicePDF(
   pdf.setFontSize(8);
   pdf.setTextColor(255);
   pdf.setFont("helvetica", "bold");
-  pdf.text("#",       col.no + 1,  y + 5.5);
-  pdf.text("Product", col.name,    y + 5.5);
+  pdf.text("#",        col.no + 1,  y + 5.5);
+  pdf.text("Product",  col.name,    y + 5.5);
   if (isGST) pdf.text("HSN", col.hsn, y + 5.5);
-  pdf.text("Qty",     col.qty,     y + 5.5, { align: "right" });
-  pdf.text("Unit",    col.unit,    y + 5.5);
-  pdf.text("Rate",    col.rate,    y + 5.5, { align: "right" });
+  pdf.text("Qty",      col.qty,     y + 5.5, { align: "right" });
+  pdf.text("Unit",     col.unit,    y + 5.5);
+  pdf.text("Rate",     col.rate,    y + 5.5, { align: "right" });
   if (isGST) {
-    pdf.text("CGST", col.cgst, y + 5.5, { align: "right" });
-    pdf.text("SGST", col.sgst, y + 5.5, { align: "right" });
+    pdf.text("CGST",   col.cgst,    y + 5.5, { align: "right" });
+    pdf.text("SGST",   col.sgst,    y + 5.5, { align: "right" });
   }
-  pdf.text("Amount", col.total, y + 5.5, { align: "right" });
+  pdf.text("Amount",   col.total,   y + 5.5, { align: "right" });
 
   y += 10;
   pdf.setFont("helvetica", "normal");
@@ -208,26 +234,29 @@ export async function buildInvoicePDF(
       pdf.setFillColor(250, 250, 250);
       pdf.rect(M, y - 3, W - M * 2, 8, "F");
     }
-    const gstRate     = parseFloat(item.gst ?? "0") || 0;
-    const cgstRate    = gstRate / 2;
+
+    const gstPct      = parseFloat(item.gst ?? "0") || 0;
+    const cgstRate    = gstPct / 2;
     const isInclusive = item.taxInclusive === true;
 
     // Taxable base per unit:
-    //   Exclusive → price is already pre-tax, base = price
-    //   Inclusive → tax is baked into price, extract it: base = price / (1 + gst/100)
-    const basePerUnit = isGST && gstRate > 0 && isInclusive
-      ? item.price / (1 + gstRate / 100)
+    //   Inclusive → extract from price: price / (1 + gst/100)
+    //   Exclusive → price is already pre-tax
+    const basePerUnit = isGST && gstPct > 0 && isInclusive
+      ? item.price / (1 + gstPct / 100)
       : item.price;
 
-    const lineBase  = basePerUnit * item.quantity;
-    const lineCGST  = isGST && gstRate > 0 ? (lineBase * cgstRate) / 100 : 0;
-    const lineSGST  = lineCGST;
+    const lineBase = basePerUnit * item.quantity;
+    const lineCGST = isGST && gstPct > 0 ? (lineBase * cgstRate) / 100 : 0;
+    const lineSGST = lineCGST;
 
     // Line total on invoice:
-    //   Exclusive → base + CGST + SGST (price × qty + tax on top)
-    //   Inclusive → selling price × qty (tax already inside, total stays the same)
-    const lineTotal = isGST && gstRate > 0
-      ? (isInclusive ? item.price * item.quantity : lineBase + lineCGST + lineSGST)
+    //   Exclusive → base + CGST + SGST
+    //   Inclusive → selling price × qty (tax already inside)
+    const lineTotal = isGST && gstPct > 0
+      ? (isInclusive
+          ? item.price * item.quantity
+          : lineBase + lineCGST + lineSGST)
       : item.total;
 
     subtotal  += lineBase;
@@ -235,15 +264,15 @@ export async function buildInvoicePDF(
     totalSGST += lineSGST;
 
     pdf.setFontSize(8);
-    pdf.text(String(i + 1),   col.no + 1, y + 2);
+    pdf.text(String(i + 1), col.no + 1, y + 2);
     pdf.text(
       pdf.splitTextToSize(item.productName, 65)[0],
       col.name, y + 2
     );
     if (isGST) pdf.text(item.hsn || "—", col.hsn, y + 2);
-    pdf.text(String(item.quantity), col.qty,   y + 2, { align: "right" });
-    pdf.text(item.unit,             col.unit,  y + 2);
-    pdf.text(item.price.toFixed(2), col.rate,  y + 2, { align: "right" });
+    pdf.text(String(item.quantity),      col.qty,   y + 2, { align: "right" });
+    pdf.text(item.unit,                  col.unit,  y + 2);
+    pdf.text(item.price.toFixed(2),      col.rate,  y + 2, { align: "right" });
     if (isGST) {
       pdf.text(lineCGST > 0 ? lineCGST.toFixed(2) : "-", col.cgst, y + 2, { align: "right" });
       pdf.text(lineSGST > 0 ? lineSGST.toFixed(2) : "-", col.sgst, y + 2, { align: "right" });
@@ -252,14 +281,19 @@ export async function buildInvoicePDF(
     y += 8;
   });
 
-  // ── Totals ────────────────────────────────────────────────────
+  // ── Totals section ───────────────────────────────────────────────────────
   pdf.setDrawColor(220);
   pdf.line(M, y + 2, W - M, y + 2);
   y += 7;
 
   const tX = 130, vX = W - M;
 
-  const addRow = (label: string, value: string, bold = false, rgb?: [number, number, number]) => {
+  const addRow = (
+    label: string,
+    value: string,
+    bold = false,
+    rgb?: [number, number, number]
+  ) => {
     pdf.setFontSize(9);
     pdf.setFont("helvetica", bold ? "bold" : "normal");
     pdf.setTextColor(...(rgb ?? [60, 60, 60]));
@@ -268,9 +302,11 @@ export async function buildInvoicePDF(
     y += 6;
   };
 
-  // Recompute grand total from enriched line totals — don't trust order.totalAmount
-  // (mobile app saves base price only, without GST added)
-  const computedTotal = isGST ? subtotal + totalCGST + totalSGST : subtotal;
+  // Bill total = computed from line totals (don't trust order.totalAmount —
+  // mobile app saves base price only without adding GST on top)
+  const computedTotal = isGST
+    ? subtotal + totalCGST + totalSGST
+    : subtotal;
 
   if (isGST) {
     addRow("Taxable Amount:", `Rs.${subtotal.toFixed(2)}`);
@@ -280,27 +316,55 @@ export async function buildInvoicePDF(
     pdf.line(tX, y, vX, y);
     y += 4;
   }
+
   addRow("Current Bill Total:", `Rs.${computedTotal.toFixed(2)}`, true, [20, 20, 20]);
 
-  if (showDue && due > 0) {
+  // ── Historical due from BEFORE this order (truly old outstanding) ────────
+  if (showDue && historicalDue > 0) {
     y += 2;
-    addRow("Previous Due:", `Rs.${due.toFixed(2)}`, false, [180, 50, 20]);
+    addRow("Previous Due:", `Rs.${historicalDue.toFixed(2)}`, false, [180, 50, 20]);
     pdf.setDrawColor(200);
     pdf.line(tX, y, vX, y);
     y += 4;
-    addRow("Grand Total Payable:", `Rs.${(computedTotal + due).toFixed(2)}`, true, [180, 50, 20]);
+    addRow(
+      "Grand Total Payable:",
+      `Rs.${(computedTotal + historicalDue).toFixed(2)}`,
+      true,
+      [180, 50, 20]
+    );
   }
 
-  if (order.amountCollected !== undefined) {
+  // ── Advance paid at order creation ───────────────────────────────────────
+  // Show advance only when > 0 (customer paid something upfront)
+  if (advancePaid > 0) {
     y += 2;
-    addRow("Amount Collected:", `Rs.${order.amountCollected.toFixed(2)}`, false, [20, 130, 60]);
-    const bal = computedTotal - order.amountCollected + (showDue ? due : 0);
-    if (bal > 0) {
-      addRow("Balance Due:", `Rs.${bal.toFixed(2)}`, true, [180, 50, 20]);
-    }
+    addRow(
+      "Advance Paid:",
+      `Rs.${advancePaid.toFixed(2)}`,
+      false,
+      [20, 130, 60]
+    );
   }
 
-  // ── Bank details (GST invoices) ───────────────────────────────
+  // ── Balance to collect on delivery ───────────────────────────────────────
+  // balanceDue = what delivery agent needs to collect
+  // = computedTotal + historicalDue − advancePaid
+  const totalPayable   = computedTotal + (showDue ? historicalDue : 0);
+  const balanceOnDelivery = Math.max(0, Math.round((totalPayable - advancePaid) * 100) / 100);
+
+  if (balanceOnDelivery > 0) {
+    addRow(
+      advancePaid > 0 ? "Balance Due on Delivery:" : "Amount Due on Delivery:",
+      `Rs.${balanceOnDelivery.toFixed(2)}`,
+      true,
+      [180, 50, 20]
+    );
+  } else if (advancePaid > 0 && balanceOnDelivery === 0) {
+    // Fully paid upfront
+    addRow("Status:", "FULLY PAID", true, [20, 130, 60]);
+  }
+
+  // ── Bank details (GST invoices) ──────────────────────────────────────────
   if (isGST && (biz?.bankName || biz?.upiId)) {
     y += 6;
     pdf.setFontSize(8);
@@ -309,11 +373,16 @@ export async function buildInvoicePDF(
     pdf.text("Payment Details:", M, y);
     y += 5;
     pdf.setFont("helvetica", "normal");
-    if (biz?.bankName)      pdf.text(`Bank: ${biz.bankName}  |  A/C: ${biz.accountNumber}  |  IFSC: ${biz.ifscCode}`, M, y), (y += 5);
-    if (biz?.upiId)         pdf.text(`UPI: ${biz.upiId}`, M, y), (y += 5);
+    if (biz?.bankName)
+      pdf.text(
+        `Bank: ${biz.bankName}  |  A/C: ${biz.accountNumber}  |  IFSC: ${biz.ifscCode}`,
+        M, y
+      ), (y += 5);
+    if (biz?.upiId)
+      pdf.text(`UPI: ${biz.upiId}`, M, y), (y += 5);
   }
 
-  // ── Signature lines ───────────────────────────────────────────
+  // ── Signature lines ──────────────────────────────────────────────────────
   if (y < 248) {
     y = Math.max(y + 8, 248);
     pdf.setDrawColor(180);
@@ -325,13 +394,19 @@ export async function buildInvoicePDF(
     pdf.text("Authorized Signatory", W - M - 60, y + 5);
   }
 
-  // ── Footer ─────────────────────────────────────────────────────
+  // ── Footer ───────────────────────────────────────────────────────────────
   pdf.setFontSize(8);
   pdf.setTextColor(160);
   pdf.setFont("helvetica", "italic");
-  if (!isGST) pdf.text("* This is an estimate only — not a tax invoice.", M, 285);
-  else        pdf.text("* Subject to jurisdiction of local courts.", M, 285);
-  pdf.text(biz?.invoiceFooter || "Thank you for your business!", W / 2, 290, { align: "center" });
+  if (!isGST)
+    pdf.text("* This is an estimate only — not a tax invoice.", M, 285);
+  else
+    pdf.text("* Subject to jurisdiction of local courts.", M, 285);
+  pdf.text(
+    biz?.invoiceFooter || "Thank you for your business!",
+    W / 2, 290,
+    { align: "center" }
+  );
 
   return pdf;
 }
@@ -341,9 +416,9 @@ export async function generateInvoicePDF(
   customer?: Partial<Customer>,
   options?: Partial<InvoiceOptions>
 ) {
-  const isGST = (options?.invoiceType ?? "estimate") === "gst";
+  const isGST  = (options?.invoiceType ?? "estimate") === "gst";
   const prefix = isGST ? "invoice" : "estimate";
-  const pdf = await buildInvoicePDF(order, customer, options);
+  const pdf    = await buildInvoicePDF(order, customer, options);
   pdf.save(`${prefix}-${(order.id ?? "order").slice(0, 8)}.pdf`);
 }
 
