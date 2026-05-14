@@ -81,7 +81,11 @@ export default function Dashboard() {
 
   const maxRevenue = Math.max(...topProducts.map((p) => p.revenue), 1);
 
-  if (loading) return <div className="p-8 text-gray-400">Loading dashboard...</div>;
+  if (loading) return (
+    <div className="p-8 flex items-center gap-3 text-gray-400">
+      <span className="animate-spin text-xl">⏳</span> Loading dashboard...
+    </div>
+  );
 
   return (
     <div className="p-6 max-w-7xl mx-auto">

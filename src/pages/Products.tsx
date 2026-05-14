@@ -8,6 +8,8 @@ import { db } from "../firebase/config";
 import { Product, PriceSlab, ProductUnit, GSTRate } from "../types";
 import { useAuthStore } from "../store/authStore";
 import Pagination from "../components/Pagination";
+import { useTamilSearch } from "../utils/UseTamilSearch";
+import { TamilSearchInput } from "../components/TamilSearchInput";
 
 const UNITS: ProductUnit[] = ["Piece", "KG", "Gram", "Liter", "ML", "Box", "Packet", "Dozen", "Bag", "Bottle", "Other"];
 const GST_RATES: { label: string; value: GSTRate }[] = [
@@ -53,6 +55,7 @@ export default function Products() {
   const [historyModal, setHistoryModal] = useState<Product | null>(null);
   const [page, setPage] = useState(1);
   const PER_PAGE = 25;
+  
 
   useEffect(() => {
     const unsub = onSnapshot(query(collection(db, "products"), orderBy("name")), (snap) => {

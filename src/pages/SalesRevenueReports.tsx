@@ -257,7 +257,11 @@ export default function SalesRevenueReports() {
 
   const rangeLabel = dateRange === "7d" ? "Last 7 days" : dateRange === "30d" ? "Last 30 days" : dateRange === "90d" ? "Last 90 days" : `${customFrom} to ${customTo}`;
 
-  if (loading) return <div className="p-8 text-gray-400">Loading reports...</div>;
+  if (loading) return (
+    <div className="p-8 flex items-center gap-3 text-gray-400">
+      <span className="animate-spin text-xl">⏳</span> Loading Sales & Revenue data...
+    </div>
+  );
 
   return (
     <div className="p-6 max-w-7xl mx-auto">

@@ -12,10 +12,12 @@ const adminNavItems = [
   { path: "/products",            label: "Products",      icon: "🛒" },
   { path: "/customers",           label: "Customers",     icon: "🏪" },
   { path: "/users",               label: "Users",         icon: "👥" },
-  { path: "/reports/salesrevenue",       label: "Sales & Revenue", icon: "📦" },
+  { path: "/reports/salesrevenue",       label: "Sales & Revenue", icon: "📈" },
+  { path: "/reports/orders",      label: "Order Reports",   icon: "📋" },
   { path: "/reports/stock",       label: "Stock Reports", icon: "📦" },
   { path: "/reports/finance",     label: "Finance Reports", icon: "💰" },
-  { path: "/reports/agent",     label: "Agent Reports", icon: "💰" },
+  { path: "/reports/customer",       label: "Customer Reports", icon: "🧑‍💼" },
+  { path: "/reports/agent",     label: "Agent Reports", icon: "👥" },
 ];
 
 // Packing staff — no create order access

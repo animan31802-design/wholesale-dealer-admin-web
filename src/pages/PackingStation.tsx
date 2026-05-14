@@ -52,7 +52,7 @@ export default function PackingStation() {
       <div className="flex items-center justify-center h-full text-gray-400">
         <div className="text-center">
           <div className="text-4xl mb-3">📦</div>
-          <p>Loading orders...</p>
+          <p><span className="animate-spin text-xl">⏳</span> Loading orders...</p>
         </div>
       </div>
     );

@@ -19,6 +19,8 @@ import SalesRevenueReports from "./pages/SalesRevenueReports";
 import StockReports from "./pages/StockReports";
 import FinanceReports from "./pages/FinanceReports";
 import AgentReports from "./pages/AgentReports";
+import OrderReports from "./pages/OrderReports";
+import CustomerReports from "./pages/CustomerReports";
 import Layout from "./components/Layout";
 
 // ── Route guards ─────────────────────────────────────────────────
@@ -106,6 +108,8 @@ export default function App() {
           <Route path="reports/stock"    element={<AdminRoute><StockReports /></AdminRoute>} />
           <Route path="reports/finance"  element={<AdminRoute><FinanceReports /></AdminRoute>} />
           <Route path="reports/agent"  element={<AdminRoute><AgentReports /></AdminRoute>} />
+          <Route path="reports/orders"   element={<AdminRoute><OrderReports /></AdminRoute>} />
+          <Route path="reports/customer"  element={<AdminRoute><CustomerReports /></AdminRoute>} />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />

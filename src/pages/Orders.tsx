@@ -233,7 +233,11 @@ export default function Orders() {
     XLSX.writeFile(wb, `orders-export-${date}.xlsx`);
   };
 
-  if (loading) return <div className="p-8 text-gray-400">Loading orders...</div>;
+  if (loading) return (
+    <div className="p-8 flex items-center gap-3 text-gray-400">
+      <span className="animate-spin text-xl">⏳</span> Loading orders...
+    </div>
+  );
 
   return (
     <div className="p-6">
