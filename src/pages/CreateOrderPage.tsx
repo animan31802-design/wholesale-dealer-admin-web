@@ -6,6 +6,8 @@ import {
 import { db } from "../firebase/config";
 import { Customer, Product, Order, OrderItem } from "../types";
 import { useAuthStore } from "../store/authStore";
+import { useTamilSearch } from "../utils/UseTamilSearch";
+import { TamilSearchInput } from "../components/TamilSearchInput";
 
 // ─── Helpers ──────────────────────────────────────────────────────
 
@@ -362,15 +364,21 @@ export default function CreateOrderPage() {
   const [lastOrderId, setLastOrderId] = useState<string | null>(null);
 
   // UI state
-  const [searchQuery, setSearchQuery]           = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [sortMode, setSortMode]                 = useState<"frequent"|"name">("frequent");
   const [qtyDialogProduct, setQtyDialogProduct] = useState<Product | null>(null);
   const [showBackDialog, setShowBackDialog]     = useState(false);
   const [draftWarnings, setDraftWarnings]       = useState<string[]>([]);
-  const [customerSearch, setCustomerSearch]     = useState("");
 
   const searchRef = useRef<HTMLInputElement>(null);
+
+  // ── Tamil-aware search for customers ────────────────────────────────────
+  const { query: customerSearch, setQuery: setCustomerSearch, results: customerSearchResults } =
+    useTamilSearch(customers as unknown as Record<string, unknown>[], ["shopName", "ownerName", "phone"]);
+
+  // ── Tamil-aware search for products ─────────────────────────────────────
+  const { query: searchQuery, setQuery: setSearchQuery, results: productSearchResults } =
+    useTamilSearch(products as unknown as Record<string, unknown>[], ["name", "category", "barcode"]);
 
   // ── Load customers, products, frequent ids ──────────────────────
   useEffect(() => {
@@ -426,18 +434,13 @@ export default function CreateOrderPage() {
   );
 
   const filteredProducts = useMemo(() => {
-    let list = products;
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      list = list.filter(
-        (p) =>
-          p.name.toLowerCase().includes(q) ||
-          (p.category || "").toLowerCase().includes(q) ||
-          (p.barcode || "").includes(q)
-      );
-    } else if (selectedCategory !== "All") {
-      list = list.filter((p) => p.category === selectedCategory);
-    }
+    // productSearchResults already filters by searchQuery (Tamil-aware).
+    // When no search query, apply category filter; when searching, show all matches.
+    let list = searchQuery.trim()
+      ? (productSearchResults as unknown as Product[])
+      : (selectedCategory !== "All"
+          ? products.filter((p) => p.category === selectedCategory)
+          : products);
 
     if (sortMode === "name") return [...list].sort((a, b) => a.name.localeCompare(b.name));
 
@@ -446,7 +449,7 @@ export default function CreateOrderPage() {
     const freq = frequentIds.map((id) => list.find((p) => p.id === id)).filter(Boolean) as Product[];
     const rest = list.filter((p) => !freqSet.has(p.id!)).sort((a, b) => a.name.localeCompare(b.name));
     return [...freq, ...rest];
-  }, [products, searchQuery, selectedCategory, sortMode, frequentIds]);
+  }, [products, productSearchResults, searchQuery, selectedCategory, sortMode, frequentIds]);
 
   const frequentProducts = useMemo(
     () => products.filter((p) => frequentIds.includes(p.id!)),
@@ -733,17 +736,8 @@ export default function CreateOrderPage() {
     }
   };
 
-  const filteredCustomers = useMemo(() => {
-    if (!customerSearch.trim()) return customers;
-    const q = customerSearch.toLowerCase();
-    return customers.filter(
-      (c) =>
-        c.shopName.toLowerCase().includes(q) ||
-        c.ownerName.toLowerCase().includes(q) ||
-        c.phone.includes(q) ||
-        c.area.toLowerCase().includes(q)
-    );
-  }, [customers, customerSearch]);
+  // filteredCustomers now comes directly from Tamil-aware search
+  const filteredCustomers = customerSearchResults as unknown as Customer[];
 
   // ─── CUSTOMER SELECTION SCREEN ────────────────────────────────────
 
@@ -770,21 +764,12 @@ export default function CreateOrderPage() {
         )}
 
         {/* Customer search */}
-        <div className="relative mb-4">
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
-          <input
-            type="text"
+        <div className="mb-4">
+          <TamilSearchInput
             value={customerSearch}
-            onChange={(e) => setCustomerSearch(e.target.value)}
-            placeholder="Search by shop, owner, phone, area…"
-            className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-300 bg-gray-50"
+            onChange={setCustomerSearch}
+            placeholder="Search by shop, owner, phone, area… (supports Tamil)"
           />
-          {customerSearch && (
-            <button onClick={() => setCustomerSearch("")}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-              ✕
-            </button>
-          )}
         </div>
 
         {loading ? (
@@ -889,22 +874,12 @@ export default function CreateOrderPage() {
       {view === "products" && (
         <div className="flex-1 flex flex-col overflow-hidden max-w-3xl mx-auto w-full">
           {/* Search */}
-          <div className="px-4 py-3 relative">
-            <span className="absolute left-7 top-1/2 -translate-y-1/2 text-gray-400">🔍</span>
-            <input
-              ref={searchRef}
-              type="text"
+          <div className="px-4 py-3">
+            <TamilSearchInput
               value={searchQuery}
-              onChange={(e) => { setSearchQuery(e.target.value); setSelectedCategory("All"); }}
-              placeholder="Search product, category, barcode…"
-              className="w-full pl-8 pr-8 py-2.5 border border-gray-200 rounded-xl bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+              onChange={(val) => { setSearchQuery(val); setSelectedCategory("All"); }}
+              placeholder="Search product, category, barcode… (supports Tamil)"
             />
-            {searchQuery && (
-              <button onClick={() => setSearchQuery("")}
-                className="absolute right-7 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                ✕
-              </button>
-            )}
           </div>
 
           {/* Filter chips */}

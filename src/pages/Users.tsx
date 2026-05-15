@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { collection, getDocs, setDoc, doc, updateDoc, orderBy, query } from "firebase/firestore";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { db } from "../firebase/config";
 import { AppUser, UserRole, Region } from "../types";
+import { useTamilSearch } from "../utils/UseTamilSearch";
+import { TamilSearchInput } from "../components/TamilSearchInput";
 
 export default function Users() {
   const [users, setUsers] = useState<AppUser[]>([]);
@@ -18,6 +20,11 @@ export default function Users() {
   const [error, setError] = useState("");
   const [editUser, setEditUser] = useState<AppUser | null>(null);
   const [editForm, setEditForm] = useState({ name: "", phone: "", role: "field_agent" as UserRole });
+
+  // ── Tamil-aware search ────────────────────────────────────────────────────
+  // Searches name, email, phone. Works with English typing for Tamil names.
+  const { query: searchQuery, setQuery: setSearchQuery, results: searchResults } =
+    useTamilSearch(users as unknown as Record<string, unknown>[], ["name", "email", "phone"]);
 
   const fetchAll = async () => {
     const [usersSnap, regionsSnap] = await Promise.all([
@@ -128,10 +135,12 @@ export default function Users() {
     packing_staff: "bg-purple-100 text-purple-700",
   };
 
-  const fieldAgents = users.filter((u) => u.role === "field_agent");
-  const deliveryAgents = users.filter((u) => u.role === "delivery");
-  const packingStaff = users.filter((u) => u.role === "packing_staff");
-  const admins = users.filter((u) => u.role === "admin");
+  const searchedUsers = searchResults as unknown as AppUser[];
+
+  const fieldAgents    = searchedUsers.filter((u) => u.role === "field_agent");
+  const deliveryAgents = searchedUsers.filter((u) => u.role === "delivery");
+  const packingStaff   = searchedUsers.filter((u) => u.role === "packing_staff");
+  const admins         = searchedUsers.filter((u) => u.role === "admin");
 
   // Reusable user group table with optional region column
   const UserTable = ({
@@ -229,11 +238,24 @@ export default function Users() {
   return (
     <div className="p-8">
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold text-gray-800">Users</h2>
+        <div>
+          <h2 className="text-2xl font-bold text-gray-800">Users</h2>
+          <p className="text-sm text-gray-400 mt-0.5">{users.length} users</p>
+        </div>
         <button onClick={() => setShowForm(true)}
           className="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-600">
           + Add User
         </button>
+      </div>
+
+      {/* Search */}
+      <div className="mb-6">
+        <TamilSearchInput
+          value={searchQuery}
+          onChange={setSearchQuery}
+          placeholder="Search by name, email, phone... (supports Tamil)"
+          className="w-72"
+        />
       </div>
 
       {loading ? <p className="text-gray-400">Loading...</p> : (

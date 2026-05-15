@@ -40,7 +40,6 @@ export default function Products() {
   const [loading, setLoading] = useState(true);
   const [newCategory, setNewCategory] = useState("");
   const [showNewCategory, setShowNewCategory] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
   const [stockFilter, setStockFilter] = useState<StockFilter>("ALL");
   const [sortBy, setSortBy] = useState<SortMode>("AZ");
   const [catFilter, setCatFilter] = useState("All");
@@ -55,7 +54,6 @@ export default function Products() {
   const [historyModal, setHistoryModal] = useState<Product | null>(null);
   const [page, setPage] = useState(1);
   const PER_PAGE = 25;
-  
 
   useEffect(() => {
     const unsub = onSnapshot(query(collection(db, "products"), orderBy("name")), (snap) => {
@@ -68,40 +66,40 @@ export default function Products() {
     return () => unsub();
   }, []);
 
-  // ── Filtering & Sorting ──
+  // ── Tamil-aware search ─────────────────────────────────────────────────────
+  // Searches name, category, barcode. Works with English typing for Tamil names.
+  // e.g. typing "arisi" matches products named "அரிசி"
+  const { query: searchQuery, setQuery: setSearchQuery, results: searchResults } =
+    useTamilSearch(products as unknown as Record<string, unknown>[], ["name", "category", "barcode"]);
+
+  // ── Stock filter + sort (applied on top of search results) ────────────────
   const filtered = useMemo(() => {
-    let list = [...products];
-    if (searchTerm) list = list.filter((p) =>
-      p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (p.category || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (p.barcode || "").includes(searchTerm)
-    );
+    let list = searchResults as unknown as Product[];
     if (catFilter !== "All") list = list.filter((p) => p.category === catFilter);
     switch (stockFilter) {
       case "LOW_STOCK":    list = list.filter((p) => p.trackInventory && p.stock > 0 && p.stock <= p.minStockAlert); break;
       case "OUT_OF_STOCK": list = list.filter((p) => p.trackInventory && p.stock <= 0); break;
     }
+    const sorted = [...list];
     switch (sortBy) {
-      case "AZ":           list.sort((a, b) => a.name.localeCompare(b.name)); break;
-      case "ZA":           list.sort((a, b) => b.name.localeCompare(a.name)); break;
-      case "sellingPrice": list.sort((a, b) => b.sellingPrice - a.sellingPrice); break;
-      case "costPrice":    list.sort((a, b) => b.costPrice - a.costPrice); break;
-      case "stock":        list.sort((a, b) => a.stock - b.stock); break;
+      case "AZ":           sorted.sort((a, b) => a.name.localeCompare(b.name)); break;
+      case "ZA":           sorted.sort((a, b) => b.name.localeCompare(a.name)); break;
+      case "sellingPrice": sorted.sort((a, b) => b.sellingPrice - a.sellingPrice); break;
+      case "costPrice":    sorted.sort((a, b) => b.costPrice - a.costPrice); break;
+      case "stock":        sorted.sort((a, b) => a.stock - b.stock); break;
     }
-    return list;
-  }, [products, searchTerm, catFilter, stockFilter, sortBy]);
+    return sorted;
+  }, [searchResults, catFilter, stockFilter, sortBy]);
 
-  // Reset page on filter change
-  useEffect(() => { setPage(1); }, [searchTerm, catFilter, stockFilter, sortBy]);
+  useEffect(() => { setPage(1); }, [searchQuery, catFilter, stockFilter, sortBy]);
 
   const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
-
   const lowStockCount   = products.filter((p) => p.trackInventory && p.stock > 0 && p.stock <= p.minStockAlert).length;
   const outOfStockCount = products.filter((p) => p.trackInventory && p.stock <= 0).length;
   const allCategories   = ["All", ...categories];
   const stockValue      = filtered.reduce((s, p) => s + (p.sellingPrice * p.stock), 0);
 
-  // ── CRUD ──
+  // ── CRUD ──────────────────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const now = new Date().toISOString();
@@ -110,7 +108,6 @@ export default function Products() {
     if (editId) { await updateDoc(doc(db, "products", editId), { ...data }); }
     else { await addDoc(collection(db, "products"), data); }
     setForm(emptyProduct()); setEditId(null); setShowForm(false);
-    ////fetchProducts();
   };
 
   const handleEdit = (product: Product) => {
@@ -121,16 +118,13 @@ export default function Products() {
   const handleDelete = async (product: Product) => {
     await deleteDoc(doc(db, "products", product.id!));
     setDeleteConfirm(null);
-    //fetchProducts();
   };
 
   const handleDuplicate = async (product: Product) => {
-    const { id, ...rest } = product;
+    const { id: _id, ...rest } = product;
     await addDoc(collection(db, "products"), { ...rest, name: `${product.name} (Copy)`, stock: 0, createdAt: new Date().toISOString() });
-    //fetchProducts();
   };
 
-  // ── Bulk Price Update ──
   const handleBulkPrice = async () => {
     const pct = parseFloat(bulkPct);
     if (!pct) return alert("Enter a valid percentage");
@@ -142,13 +136,9 @@ export default function Products() {
       });
     }
     setBulkLoading(false); setShowBulkModal(false); setBulkPct("");
-    //fetchProducts();
   };
 
-  // ── Export CSV ──
-  const handleStockAdjust = async (
-    product: Product, qty: number, reason: string, direction: "in" | "out"
-  ) => {
+  const handleStockAdjust = async (product: Product, qty: number, reason: string, direction: "in" | "out") => {
     const newStock = direction === "in"
       ? (product.stock || 0) + qty
       : Math.max(0, (product.stock || 0) - qty);
@@ -157,22 +147,16 @@ export default function Products() {
       type: direction === "in" ? "manual_in" : "manual_out",
       direction, qty,
       stockBefore: product.stock || 0,
-      stockAfter: newStock,
-      reason,
-      createdBy: user!.uid,
-      createdByName: user!.name,
+      stockAfter: newStock, reason,
+      createdBy: user!.uid, createdByName: user!.name,
       createdAt: new Date().toISOString(),
     });
     setStockModal(null);
-    //fetchProducts();
   };
 
-    const handleExport = () => {
+  const handleExport = () => {
     const headers = ["Name","Category","Unit","SellingPrice","CostPrice","GST","HSN","Stock","MinStockAlert","SellInFraction","Barcode"];
-    const rows = filtered.map((p) => [
-      p.name, p.category, p.unit, p.sellingPrice, p.costPrice,
-      p.gst, p.hsn || "", p.stock, p.minStockAlert, p.sellInFraction, p.barcode || ""
-    ]);
+    const rows = filtered.map((p) => [p.name, p.category, p.unit, p.sellingPrice, p.costPrice, p.gst, p.hsn || "", p.stock, p.minStockAlert, p.sellInFraction, p.barcode || ""]);
     const csv = [headers, ...rows].map((r) => r.join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
@@ -180,7 +164,6 @@ export default function Products() {
     URL.revokeObjectURL(url);
   };
 
-  // ── Import CSV ──
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -201,23 +184,18 @@ export default function Products() {
           name: row.Name, category: row.Category || "", unit: row.Unit || "Piece",
           sellingPrice: parseFloat(row.SellingPrice) || 0,
           costPrice: parseFloat(row.CostPrice) || 0,
-          gst: (row.GST as GSTRate) || "none",
-          hsn: row.HSN || "",
-          stock: parseFloat(row.Stock) || 0,
-          minStockAlert: parseFloat(row.MinStockAlert) || 0,
+          gst: (row.GST as GSTRate) || "none", hsn: row.HSN || "",
+          stock: parseFloat(row.Stock) || 0, minStockAlert: parseFloat(row.MinStockAlert) || 0,
           sellInFraction: row.SellInFraction === "true",
-          trackInventory: true, priceSlabs: [],
-          barcode: row.Barcode || "",
+          trackInventory: true, priceSlabs: [], barcode: row.Barcode || "",
           createdAt: new Date().toISOString(),
         });
       }
-      //fetchProducts(); alert(`Imported ${rows.length} products`);
     };
     reader.readAsText(file);
     e.target.value = "";
   };
 
-  // ── Price Slabs ──
   const addSlab = () => {
     const last = form.priceSlabs[form.priceSlabs.length - 1];
     const newMin = last ? (last.maxQty ?? 0) + 1 : 1;
@@ -236,12 +214,11 @@ export default function Products() {
     setNewCategory(""); setShowNewCategory(false);
   };
 
-  const margin = (p: Product) => p.costPrice > 0
-    ? (((p.sellingPrice - p.costPrice) / p.costPrice) * 100).toFixed(0) : null;
+  const margin = (p: Product) => p.costPrice > 0 ? (((p.sellingPrice - p.costPrice) / p.costPrice) * 100).toFixed(0) : null;
 
   return (
     <div className="p-8">
-      {/* ── Header ── */}
+      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold text-gray-800">Products</h2>
@@ -252,33 +229,26 @@ export default function Products() {
         <div className="flex gap-2">
           {isAdmin && (
             <>
-              <button onClick={() => setShowBulkModal(true)} className="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm hover:bg-gray-50">
-                📊 Bulk Price
-              </button>
-              <button onClick={() => fileRef.current?.click()} className="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm hover:bg-gray-50">
-                ⬆️ Import CSV
-              </button>
+              <button onClick={() => setShowBulkModal(true)} className="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm hover:bg-gray-50">📊 Bulk Price</button>
+              <button onClick={() => fileRef.current?.click()} className="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm hover:bg-gray-50">⬆️ Import CSV</button>
               <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleImport} />
-              <button onClick={handleExport} className="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm hover:bg-gray-50">
-                ⬇️ Export CSV
-              </button>
+              <button onClick={handleExport} className="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm hover:bg-gray-50">⬇️ Export CSV</button>
               <button onClick={() => { setForm(emptyProduct()); setEditId(null); setShowForm(true); }}
-                className="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-600">
-                + Add Product
-              </button>
+                className="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-600">+ Add Product</button>
             </>
           )}
-          {!isAdmin && (
-            <span className="text-xs text-gray-400 bg-gray-100 px-3 py-2 rounded-lg">View Only</span>
-          )}
+          {!isAdmin && <span className="text-xs text-gray-400 bg-gray-100 px-3 py-2 rounded-lg">View Only</span>}
         </div>
       </div>
 
-      {/* ── Search + Sort ── */}
+      {/* Search + Sort */}
       <div className="flex gap-3 mb-4 flex-wrap">
-        <input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-          placeholder="Search by name, category, barcode..."
-          className="border border-gray-300 rounded-lg px-4 py-2 text-sm w-72 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+        <TamilSearchInput
+          value={searchQuery}
+          onChange={setSearchQuery}
+          placeholder="Search by name, category, barcode…"
+          className="w-72"
+        />
         <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortMode)}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300">
           <option value="AZ">Sort: A → Z</option>
@@ -289,12 +259,12 @@ export default function Products() {
         </select>
       </div>
 
-      {/* ── Stock Filter Chips ── */}
+      {/* Stock Filter Chips */}
       <div className="flex gap-2 mb-3 flex-wrap">
         {([
-          { key: "ALL", label: "All Products", color: "orange" },
-          { key: "LOW_STOCK", label: `⚠️ Low Stock (${lowStockCount})`, color: "yellow" },
-          { key: "OUT_OF_STOCK", label: `🔴 Out of Stock (${outOfStockCount})`, color: "red" },
+          { key: "ALL",          label: "All Products",                       color: "orange" },
+          { key: "LOW_STOCK",    label: `⚠️ Low Stock (${lowStockCount})`,    color: "yellow" },
+          { key: "OUT_OF_STOCK", label: `🔴 Out of Stock (${outOfStockCount})`, color: "red"  },
         ] as const).map(({ key, label, color }) => (
           <button key={key} onClick={() => setStockFilter(key)}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
@@ -303,27 +273,21 @@ export default function Products() {
                 : color === "yellow" ? "bg-yellow-100 text-yellow-700 border-yellow-300"
                 : "bg-red-100 text-red-700 border-red-300"
                 : "bg-white text-gray-500 border-gray-200 hover:border-gray-300"
-            }`}>
-            {label}
-          </button>
+            }`}>{label}</button>
         ))}
       </div>
 
-      {/* ── Category Chips ── */}
+      {/* Category Chips */}
       <div className="flex gap-2 mb-5 flex-wrap">
         {allCategories.map((c) => (
           <button key={c} onClick={() => setCatFilter(c)}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
-              catFilter === c
-                ? "bg-gray-800 text-white border-gray-800"
-                : "bg-white text-gray-500 border-gray-200 hover:border-gray-300"
-            }`}>
-            {c}
-          </button>
+              catFilter === c ? "bg-gray-800 text-white border-gray-800" : "bg-white text-gray-500 border-gray-200 hover:border-gray-300"
+            }`}>{c}</button>
         ))}
       </div>
 
-      {/* ── Table ── */}
+      {/* Table */}
       {loading ? <p className="text-gray-400">Loading...</p> : (
         <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
           <table className="w-full text-sm">
@@ -363,9 +327,7 @@ export default function Products() {
                       {isAdmin && margin(product) && <span className="text-[10px] text-green-500 ml-1">+{margin(product)}%</span>}
                     </td>
                     {isAdmin && <td className="px-5 py-4 text-gray-500">₹{product.costPrice}</td>}
-                    <td className="px-5 py-4 text-gray-500 text-xs">
-                      {product.hsn || "—"}
-                    </td>
+                    <td className="px-5 py-4 text-gray-500 text-xs">{product.hsn || "—"}</td>
                     <td className="px-5 py-4">
                       {product.gst === "none"
                         ? <span className="text-gray-400 text-xs">No GST</span>
@@ -392,20 +354,11 @@ export default function Products() {
                     <td className="px-5 py-4">
                       {isAdmin && (
                         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button onClick={() => handleEdit(product)}
-                            className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100">✏️ Edit</button>
-                          <button onClick={() => handleDuplicate(product)}
-                            className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded hover:bg-gray-100">📋 Copy</button>
-                          {product.trackInventory && (
-                            <button onClick={() => setStockModal(product)}
-                              className="text-xs bg-green-50 text-green-600 px-2 py-1 rounded hover:bg-green-100">📦 Stock</button>
-                          )}
-                          {product.trackInventory && (
-                            <button onClick={() => setHistoryModal(product)}
-                              className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded hover:bg-purple-100">📋 History</button>
-                          )}
-                          <button onClick={() => setDeleteConfirm(product)}
-                            className="text-xs bg-red-50 text-red-500 px-2 py-1 rounded hover:bg-red-100">🗑️</button>
+                          <button onClick={() => handleEdit(product)} className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100">✏️ Edit</button>
+                          <button onClick={() => handleDuplicate(product)} className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded hover:bg-gray-100">📋 Copy</button>
+                          {product.trackInventory && <button onClick={() => setStockModal(product)} className="text-xs bg-green-50 text-green-600 px-2 py-1 rounded hover:bg-green-100">📦 Stock</button>}
+                          {product.trackInventory && <button onClick={() => setHistoryModal(product)} className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded hover:bg-purple-100">📋 History</button>}
+                          <button onClick={() => setDeleteConfirm(product)} className="text-xs bg-red-50 text-red-500 px-2 py-1 rounded hover:bg-red-100">🗑️</button>
                         </div>
                       )}
                     </td>
@@ -424,7 +377,7 @@ export default function Products() {
         </div>
       )}
 
-      {/* ── Product Form Modal ── */}
+      {/* Product Form Modal */}
       {showForm && isAdmin && (
         <div className="fixed inset-0 bg-black/60 flex items-start justify-center z-50 overflow-y-auto py-8 px-4">
           <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl">
@@ -433,7 +386,6 @@ export default function Products() {
               <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
             </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-6">
-
               <Section title="Basic Information">
                 <Field label="Product Name *">
                   <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -459,9 +411,7 @@ export default function Products() {
                   <div className="flex flex-wrap gap-2">
                     {UNITS.map((u) => (
                       <button key={u} type="button" onClick={() => setForm({ ...form, unit: u })}
-                        className={`px-3 py-1.5 rounded-lg text-sm border transition-all ${form.unit === u ? "bg-orange-500 text-white border-orange-500" : "border-gray-300 text-gray-600 hover:border-orange-300"}`}>
-                        {u}
-                      </button>
+                        className={`px-3 py-1.5 rounded-lg text-sm border transition-all ${form.unit === u ? "bg-orange-500 text-white border-orange-500" : "border-gray-300 text-gray-600 hover:border-orange-300"}`}>{u}</button>
                     ))}
                   </div>
                 </Field>
@@ -490,32 +440,21 @@ export default function Products() {
                 </div>
                 {form.costPrice > 0 && form.sellingPrice > 0 && (
                   <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 text-xs text-green-700">
-                    Margin: ₹{(form.sellingPrice - form.costPrice).toFixed(2)} per unit
-                    ({(((form.sellingPrice - form.costPrice) / form.costPrice) * 100).toFixed(1)}%)
+                    Margin: ₹{(form.sellingPrice - form.costPrice).toFixed(2)} per unit ({(((form.sellingPrice - form.costPrice) / form.costPrice) * 100).toFixed(1)}%)
                   </div>
                 )}
                 <Field label="HSN Code (Optional)">
-                  <input
-                    value={form.hsn || ""}
-                    onChange={(e) => setForm({ ...form, hsn: e.target.value })}
-                    placeholder="e.g. 1006 (for rice)"
-                    className={inputCls}
-                  />
-                  <p className="text-xs text-gray-400 mt-1">
-                    Harmonised System of Nomenclature code for GST invoicing
-                  </p>
+                  <input value={form.hsn || ""} onChange={(e) => setForm({ ...form, hsn: e.target.value })} placeholder="e.g. 1006 (for rice)" className={inputCls} />
+                  <p className="text-xs text-gray-400 mt-1">Harmonised System of Nomenclature code for GST invoicing</p>
                 </Field>
                 <Field label="GST Rate *">
                   <div className="flex flex-wrap gap-2">
                     {GST_RATES.map((g) => (
                       <button key={g.value} type="button" onClick={() => setForm({ ...form, gst: g.value })}
-                        className={`px-3 py-2 rounded-lg text-sm border transition-all ${form.gst === g.value ? "bg-orange-500 text-white border-orange-500" : "border-gray-300 text-gray-600 hover:border-orange-300"}`}>
-                        {g.label}
-                      </button>
+                        className={`px-3 py-2 rounded-lg text-sm border transition-all ${form.gst === g.value ? "bg-orange-500 text-white border-orange-500" : "border-gray-300 text-gray-600 hover:border-orange-300"}`}>{g.label}</button>
                     ))}
                   </div>
                 </Field>
-
                 {form.gst !== "none" && (
                   <div className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-xl px-4 py-3">
                     <div>
@@ -526,16 +465,12 @@ export default function Products() {
                           : `Selling price ₹${form.sellingPrice} + ${form.gst}% GST = ₹${form.sellingPrice > 0 ? (form.sellingPrice * (1 + parseFloat(form.gst) / 100)).toFixed(2) : "0.00"} on bill`}
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setForm({ ...form, taxInclusive: !form.taxInclusive })}
-                      className={`relative w-12 h-6 rounded-full transition-colors flex-shrink-0 ${form.taxInclusive ? "bg-orange-500" : "bg-gray-300"}`}
-                    >
+                    <button type="button" onClick={() => setForm({ ...form, taxInclusive: !form.taxInclusive })}
+                      className={`relative w-12 h-6 rounded-full transition-colors flex-shrink-0 ${form.taxInclusive ? "bg-orange-500" : "bg-gray-300"}`}>
                       <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${form.taxInclusive ? "translate-x-6" : "translate-x-0.5"}`} />
                     </button>
                   </div>
                 )}
-
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <label className="text-sm font-medium text-gray-700">Quantity Price Slabs</label>
@@ -620,7 +555,7 @@ export default function Products() {
         </div>
       )}
 
-      {/* ── Bulk Price Modal ── */}
+      {/* Bulk Price Modal */}
       {showBulkModal && isAdmin && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
@@ -638,13 +573,8 @@ export default function Products() {
         </div>
       )}
 
-      {/* ── Delete Confirm Modal ── */}
-      {stockModal && isAdmin && (
-        <StockAdjustModal product={stockModal} onClose={() => setStockModal(null)} onAdjust={handleStockAdjust} />
-      )}
-      {historyModal && (
-        <StockHistoryModal product={historyModal} onClose={() => setHistoryModal(null)} />
-      )}
+      {stockModal  && isAdmin && <StockAdjustModal  product={stockModal}  onClose={() => setStockModal(null)}  onAdjust={handleStockAdjust} />}
+      {historyModal &&           <StockHistoryModal  product={historyModal} onClose={() => setHistoryModal(null)} />}
       {deleteConfirm && isAdmin && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
@@ -660,6 +590,8 @@ export default function Products() {
     </div>
   );
 }
+
+// ── Sub-components ─────────────────────────────────────────────────────────────
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -685,8 +617,9 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
     </button>
   );
 }
+
 const inputCls = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300";
-// ── Stock Adjust Modal ────────────────────────────────────────────
+
 function StockAdjustModal({ product, onClose, onAdjust }: {
   product: Product;
   onClose: () => void;
@@ -726,14 +659,12 @@ function StockAdjustModal({ product, onClose, onAdjust }: {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Quantity ({product.unit}) *</label>
             <input type="number" min="0.01" step={product.sellInFraction ? "0.01" : "1"}
-              value={qty} onChange={(e) => setQty(e.target.value)}
-              placeholder={`e.g. 50 ${product.unit}`}
+              value={qty} onChange={(e) => setQty(e.target.value)} placeholder={`e.g. 50 ${product.unit}`}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Reason *</label>
-            <input value={reason} onChange={(e) => setReason(e.target.value)}
-              placeholder="e.g. New purchase, Damage write-off..."
+            <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. New purchase, Damage write-off..."
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
           </div>
         </div>
@@ -754,16 +685,21 @@ function StockAdjustModal({ product, onClose, onAdjust }: {
   );
 }
 
-// ── Stock History Modal ───────────────────────────────────────────
 function StockHistoryModal({ product, onClose }: { product: Product; onClose: () => void }) {
-  const [movements, setMovements] = useState<any[]>([]);
+  const [movements, setMovements] = useState<Record<string, unknown>[]>([]);
   const [loading, setLoading]     = useState(true);
+
   useEffect(() => {
     getDocs(query(collection(db, "products", product.id!, "stockMovements"), orderBy("createdAt", "desc")))
       .then((snap) => { setMovements(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); setLoading(false); })
       .catch(() => setLoading(false));
   }, [product.id]);
-  const TYPE_LABELS: Record<string,string> = { manual_in:"Stock In", manual_out:"Stock Out", order_placed:"Order Placed", order_cancelled:"Order Cancelled" };
+
+  const TYPE_LABELS: Record<string, string> = {
+    manual_in: "Stock In", manual_out: "Stock Out",
+    order_placed: "Order Placed", order_cancelled: "Order Cancelled",
+  };
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
@@ -775,32 +711,45 @@ function StockHistoryModal({ product, onClose }: { product: Product; onClose: ()
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
         </div>
         <div className="flex-1 overflow-y-auto">
-          {loading ? <div className="text-center py-10 text-gray-400">Loading...</div>
-          : movements.length === 0 ? <div className="text-center py-16 text-gray-400"><p className="text-3xl mb-2">📭</p><p>No history yet</p></div>
-          : (
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-gray-400 text-xs uppercase tracking-wide sticky top-0">
-                <tr>
-                  <th className="px-5 py-3 text-left">Date</th>
-                  <th className="px-5 py-3 text-left">Type</th>
-                  <th className="px-5 py-3 text-left">Reason</th>
-                  <th className="px-5 py-3 text-right">Qty</th>
-                  <th className="px-5 py-3 text-right">After</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {movements.map((m) => (
-                  <tr key={m.id} className="hover:bg-gray-50">
-                    <td className="px-5 py-3 text-gray-500 text-xs whitespace-nowrap">{new Date(m.createdAt).toLocaleDateString("en-IN", {day:"2-digit",month:"short",year:"numeric"})}</td>
-                    <td className="px-5 py-3"><span className={`text-xs px-2 py-0.5 rounded-full font-medium ${m.direction === "in" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>{TYPE_LABELS[m.type] || m.type}</span></td>
-                    <td className="px-5 py-3 text-gray-500 text-xs"><p>{m.reason || "—"}</p>{m.createdByName && <p className="text-gray-400">{m.createdByName}</p>}</td>
-                    <td className={`px-5 py-3 text-right font-semibold ${m.direction === "in" ? "text-green-600" : "text-red-600"}`}>{m.direction === "in" ? "+" : "-"}{m.qty}</td>
-                    <td className="px-5 py-3 text-right font-medium text-gray-800">{m.stockAfter}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+          {loading
+            ? <div className="text-center py-10 text-gray-400">Loading...</div>
+            : movements.length === 0
+              ? <div className="text-center py-16 text-gray-400"><p className="text-3xl mb-2">📭</p><p>No history yet</p></div>
+              : (
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 text-gray-400 text-xs uppercase tracking-wide sticky top-0">
+                    <tr>
+                      <th className="px-5 py-3 text-left">Date</th>
+                      <th className="px-5 py-3 text-left">Type</th>
+                      <th className="px-5 py-3 text-left">Reason</th>
+                      <th className="px-5 py-3 text-right">Qty</th>
+                      <th className="px-5 py-3 text-right">After</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {movements.map((m) => (
+                      <tr key={m.id as string} className="hover:bg-gray-50">
+                        <td className="px-5 py-3 text-gray-500 text-xs whitespace-nowrap">
+                          {new Date(m.createdAt as string).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                        </td>
+                        <td className="px-5 py-3">
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${m.direction === "in" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                            {TYPE_LABELS[m.type as string] ?? (m.type as string)}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 text-gray-500 text-xs">
+                          <p>{String(m.reason ?? "—")}</p>
+                          {!!m.createdByName && <p className="text-gray-400">{String(m.createdByName)}</p>}
+                        </td>
+                        <td className={`px-5 py-3 text-right font-semibold ${m.direction === "in" ? "text-green-600" : "text-red-600"}`}>
+                          {m.direction === "in" ? "+" : "-"}{m.qty as number}
+                        </td>
+                        <td className="px-5 py-3 text-right font-medium text-gray-800">{m.stockAfter as number}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
         </div>
       </div>
     </div>

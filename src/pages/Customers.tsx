@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import {
   collection, getDocs, addDoc, updateDoc,
@@ -47,7 +47,6 @@ export default function Customers() {
   const [loading, setLoading]         = useState(true);
   const [showNewRegion, setShowNewRegion] = useState(false);
   const [newRegion, setNewRegion]     = useState("");
-  const [searchTerm, setSearchTerm]   = useState("");
   const [filterRegion, setFilterRegion] = useState("");
   const [ledgerCustomer, setLedgerCustomer] = useState<Customer | null>(null);
   const [page, setPage] = useState(1);
@@ -55,6 +54,11 @@ export default function Customers() {
   const { user } = useAuthStore();
   const isAdmin = user?.role === "admin";
   const csvRef = useRef<HTMLInputElement>(null);
+
+  // ── Tamil-aware search ────────────────────────────────────────────────────
+  // Searches shopName, ownerName, phone. Works with English typing for Tamil names.
+  const { query: searchQuery, setQuery: setSearchQuery, results: searchResults } =
+    useTamilSearch(customers as unknown as Record<string, unknown>[], ["shopName", "ownerName", "phone"]);
 
   // ── Export customers to Excel ──
   const handleExport = () => {
@@ -209,19 +213,17 @@ ${skipped} rows skipped (missing shop name or phone)`);
     await deleteDoc(doc(db, "customers", id)); fetchAll();
   };
 
-  const filtered = customers.filter((c) => {
-    const s = searchTerm.toLowerCase();
-    const matchSearch = !s ||
-      c.shopName.toLowerCase().includes(s) ||
-      c.ownerName.toLowerCase().includes(s) ||
-      c.phone.includes(s);
-    const matchRegion = !filterRegion || filterRegion === "__due__"
-      ? filterRegion === "__due__" ? (c.outstandingDue || 0) > 0 : true
-      : c.regionId === filterRegion;
-    return matchSearch && matchRegion;
-  });
+  const filtered = useMemo(() => {
+    let list = searchResults as unknown as Customer[];
+    if (filterRegion === "__due__") {
+      list = list.filter((c) => (c.outstandingDue || 0) > 0);
+    } else if (filterRegion) {
+      list = list.filter((c) => c.regionId === filterRegion);
+    }
+    return list;
+  }, [searchResults, filterRegion]);
 
-  useEffect(() => { setPage(1); }, [searchTerm, filterRegion]);
+  useEffect(() => { setPage(1); }, [searchQuery, filterRegion]);
 
   const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
@@ -269,9 +271,12 @@ ${skipped} rows skipped (missing shop name or phone)`);
 
       {/* Filters */}
       <div className="flex gap-3 mb-5 flex-wrap">
-        <input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-          placeholder="Search by name, owner, phone..."
-          className="border border-gray-300 rounded-lg px-4 py-2 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-orange-300" />
+        <TamilSearchInput
+          value={searchQuery}
+          onChange={setSearchQuery}
+          placeholder="Search by name, owner, phone... (supports Tamil)"
+          className="w-72"
+        />
         <select value={filterRegion} onChange={(e) => setFilterRegion(e.target.value)}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300">
           <option value="">All Regions</option>

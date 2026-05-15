@@ -12,26 +12,23 @@
  *   className    - optional extra CSS class for the wrapper
  */
 
-import React from "react";
-
-interface TamilSearchInputProps {
+interface Props {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   className?: string;
 }
 
-export const TamilSearchInput: React.FC<TamilSearchInputProps> = ({
+export function TamilSearchInput({
   value,
   onChange,
   placeholder = "Search… (English or Tamil)",
   className = "",
-}) => {
+}: Props) {
   return (
-    <div className={`tamil-search-wrapper ${className}`} style={wrapperStyle}>
-      {/* Search icon */}
+    <div className={`relative flex items-center ${className}`}>
       <svg
-        style={iconStyle}
+        className="absolute left-3 w-4 h-4 text-gray-400 pointer-events-none shrink-0"
         xmlns="http://www.w3.org/2000/svg"
         viewBox="0 0 24 24"
         fill="none"
@@ -49,62 +46,21 @@ export const TamilSearchInput: React.FC<TamilSearchInputProps> = ({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        style={inputStyle}
         spellCheck={false}
         autoComplete="off"
+        className="border border-gray-300 rounded-lg pl-9 pr-8 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-orange-400"
       />
 
-      {/* Clear button */}
-      {value && (
+      {value.length > 0 && (
         <button
-          onClick={() => onChange("")}
-          style={clearBtnStyle}
-          aria-label="Clear search"
           type="button"
+          onClick={() => onChange("")}
+          aria-label="Clear search"
+          className="absolute right-2 text-gray-400 hover:text-gray-600 text-xs px-1"
         >
           ✕
         </button>
       )}
     </div>
   );
-};
-
-// ── Inline styles (safe defaults; override via className if you use Tailwind/CSS) ──
-const wrapperStyle: React.CSSProperties = {
-  position: "relative",
-  display: "flex",
-  alignItems: "center",
-  width: "100%",
-};
-
-const iconStyle: React.CSSProperties = {
-  position: "absolute",
-  left: 12,
-  width: 18,
-  height: 18,
-  color: "#9ca3af",
-  pointerEvents: "none",
-};
-
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "10px 40px 10px 40px",
-  border: "1px solid #e5e7eb",
-  borderRadius: 9999,
-  fontSize: 14,
-  outline: "none",
-  backgroundColor: "#f9fafb",
-  transition: "border-color 0.15s",
-};
-
-const clearBtnStyle: React.CSSProperties = {
-  position: "absolute",
-  right: 12,
-  background: "none",
-  border: "none",
-  cursor: "pointer",
-  color: "#9ca3af",
-  fontSize: 13,
-  padding: 0,
-  lineHeight: 1,
-};
+}

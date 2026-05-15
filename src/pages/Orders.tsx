@@ -11,6 +11,8 @@ import { useAuthStore } from "../store/authStore";
 import { buildInvoicePDF } from "../utils/invoice";
 import Pagination from "../components/Pagination";
 import { Customer, InvoiceType, BillingMode } from "../types";
+import { useTamilSearch } from "../utils/UseTamilSearch";
+import { TamilSearchInput } from "../components/TamilSearchInput";
 
 const STATUS_COLORS: Record<string, string> = {
   pending:          "bg-yellow-100 text-yellow-700",
@@ -42,7 +44,6 @@ export default function Orders() {
 
   // ── Filter state ─────────────────────────────────────────────
   const [activeTab, setActiveTab]   = useState<"all"|"pending"|"packed"|"assigned"|"out_for_delivery"|"delivered"|"cancelled">("all");
-  const [search, setSearch]         = useState("");
   const [filterAgent, setFilterAgent] = useState("");
   const [filterRegion, setFilterRegion] = useState("");
   const [filterDelivery, setFilterDelivery] = useState("");
@@ -51,6 +52,22 @@ export default function Orders() {
   const [showFilters, setShowFilters] = useState(false);
   const [page, setPage] = useState(1);
   const PER_PAGE = 20;
+
+  // ── Tamil-aware search ────────────────────────────────────────────────────
+  // Flattened fields: customerName, agentName, deliveryPersonName, id.
+  // Works with English typing for Tamil customer/agent names.
+  const ordersForSearch = useMemo(() =>
+    orders.map((o) => ({
+      ...o,
+      // Join all product names so Tamil product search works too
+      _productNames: o.items.map((i) => i.productName).join(" "),
+    })),
+    [orders]
+  );
+  const { query: search, setQuery: setSearch, results: searchResults } =
+    useTamilSearch(ordersForSearch as unknown as Record<string, unknown>[], [
+      "customerName", "agentName", "deliveryPersonName", "id", "_productNames",
+    ]);
 
   const prevPendingCount = useRef<number | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -158,26 +175,15 @@ export default function Orders() {
 
   // ── Filtering logic ──────────────────────────────────────────
   const filtered = useMemo(() => {
-    let list = activeTab === "all" ? orders : orders.filter((o) => o.status === activeTab);
-
-    if (search.trim()) {
-      const s = search.toLowerCase();
-      list = list.filter((o) =>
-        o.customerName.toLowerCase().includes(s) ||
-        o.agentName.toLowerCase().includes(s) ||
-        (o.id || "").toLowerCase().includes(s) ||
-        (o.deliveryPersonName || "").toLowerCase().includes(s) ||
-        o.items.some((i) => i.productName.toLowerCase().includes(s))
-      );
-    }
+    let list = (searchResults as unknown as Order[]);
+    if (activeTab !== "all") list = list.filter((o) => o.status === activeTab);
     if (filterAgent)    list = list.filter((o) => o.agentId === filterAgent);
     if (filterRegion)   list = list.filter((o) => o.regionName === filterRegion);
     if (filterDelivery) list = list.filter((o) => o.deliveryPersonId === filterDelivery);
     if (dateFrom)       list = list.filter((o) => o.createdAt >= dateFrom);
     if (dateTo)         list = list.filter((o) => o.createdAt <= dateTo + "T23:59:59");
-
     return list;
-  }, [orders, activeTab, search, filterAgent, filterRegion, filterDelivery, dateFrom, dateTo]);
+  }, [searchResults, activeTab, filterAgent, filterRegion, filterDelivery, dateFrom, dateTo]);
 
   const tabCounts = {
     all:              orders.length,
@@ -300,18 +306,13 @@ export default function Orders() {
 
       {/* Search + Filter bar */}
       <div className="flex gap-2 mb-3 flex-wrap items-center">
-        {/* Search */}
-        <div className="relative flex-1 min-w-[200px]">
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
-          <input
-            value={search} onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search customer, agent, product, order ID..."
-            className="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+        {/* Tamil-aware Search */}
+        <div className="flex-1 min-w-[200px]">
+          <TamilSearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Search customer, agent, product, order ID... (supports Tamil)"
           />
-          {search && (
-            <button onClick={() => setSearch("")}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">✕</button>
-          )}
         </div>
 
         {/* Toggle advanced filters */}
