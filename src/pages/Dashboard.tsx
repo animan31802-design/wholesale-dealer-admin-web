@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { collection, onSnapshot, query, orderBy } from "firebase/firestore";
+import { collection, onSnapshot, query, orderBy, getDocs } from "firebase/firestore";
 import { db } from "../firebase/config";
-import { Order, Product } from "../types";
+import { Order, Product, Customer } from "../types";
+import { getOverdueCustomers, OverdueCustomer } from "../utils/ledger";
+import { useAuthStore } from "../store/authStore";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
 const STATUS_COLOR: Record<string, string> = {
@@ -17,11 +19,18 @@ const STATUS_LABEL: Record<string, string> = {
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { user } = useAuthStore();
+  const isAdmin = user?.role === "admin";
   const [orders, setOrders]     = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading]   = useState(true);
   const [stockModal, setStockModal] = useState<"low"|"out"|null>(null);
   const [chartDays, setChartDays]   = useState<7|30>(7);
+
+  // ── Overdue due state (admin only) ────────────────────────────
+  const [overdueList, setOverdueList]     = useState<OverdueCustomer[]>([]);
+  const [overdueModal, setOverdueModal]   = useState(false);
+  const [overdueLoading, setOverdueLoading] = useState(false);
 
   useEffect(() => {
     const unsub1 = onSnapshot(query(collection(db, "orders"), orderBy("createdAt", "desc")), (snap) => {
@@ -31,6 +40,20 @@ export default function Dashboard() {
     const unsub2 = onSnapshot(query(collection(db, "products"), orderBy("name")), (snap) => {
       setProducts(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Product)));
     });
+
+    // ── Fetch overdue customers (admin only, once on mount) ────
+    if (isAdmin) {
+      setOverdueLoading(true);
+      getDocs(query(collection(db, "customers"), orderBy("shopName")))
+        .then(async (snap) => {
+          const customers = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Customer));
+          const overdue = await getOverdueCustomers(customers, 30);
+          setOverdueList(overdue);
+        })
+        .catch(() => {})
+        .finally(() => setOverdueLoading(false));
+    }
+
     return () => { unsub1(); unsub2(); };
   }, []);
 
@@ -127,6 +150,36 @@ export default function Dashboard() {
               <div className="ml-auto text-yellow-300 text-lg">→</div>
             </button>
           )}
+        </div>
+      )}
+
+      {/* Overdue due alert (admin only) */}
+      {isAdmin && (overdueLoading || overdueList.length > 0) && (
+        <div className="mb-6">
+          <button
+            onClick={() => !overdueLoading && setOverdueModal(true)}
+            className="w-full flex items-center gap-4 bg-orange-50 border border-orange-200 rounded-2xl p-4 text-left hover:bg-orange-100 transition-all"
+          >
+            <div className="bg-orange-100 rounded-xl w-12 h-12 flex items-center justify-center text-2xl flex-shrink-0">
+              {overdueLoading ? <span className="animate-spin text-base">⏳</span> : "🔔"}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-orange-500 font-semibold uppercase tracking-wide">Overdue Balances · 30+ Days</p>
+              {overdueLoading ? (
+                <p className="text-sm text-orange-400 mt-0.5">Checking customer dues...</p>
+              ) : (
+                <>
+                  <p className="text-3xl font-bold text-orange-600 leading-tight">{overdueList.length}</p>
+                  <p className="text-xs text-orange-400 mt-0.5 truncate">
+                    {overdueList.slice(0, 2).map((o) => o.customer.shopName).join(", ")}
+                    {overdueList.length > 2 ? ` +${overdueList.length - 2} more` : ""}
+                    {" · "}Total ₹{overdueList.reduce((s, o) => s + o.dueAmount, 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })} pending
+                  </p>
+                </>
+              )}
+            </div>
+            {!overdueLoading && <div className="ml-auto text-orange-300 text-lg flex-shrink-0">→</div>}
+          </button>
         </div>
       )}
 
@@ -261,6 +314,15 @@ export default function Dashboard() {
           onClose={() => setStockModal(null)}
           onGoToProducts={() => { setStockModal(null); navigate("/products"); }} />
       )}
+
+      {/* Overdue due modal */}
+      {overdueModal && (
+        <OverdueDueModal
+          overdueList={overdueList}
+          onClose={() => setOverdueModal(false)}
+          onGoToCustomers={() => { setOverdueModal(false); navigate("/customers"); }}
+        />
+      )}
     </div>
   );
 }
@@ -299,6 +361,90 @@ function StockAlertModal({ type, products, onClose, onGoToProducts }: {
         <div className="flex gap-3 px-6 py-4 border-t border-gray-100">
           <button onClick={onClose} className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm">Close</button>
           <button onClick={onGoToProducts} className={`flex-1 text-white py-2.5 rounded-xl text-sm font-semibold ${isOut ? "bg-red-500 hover:bg-red-600" : "bg-yellow-500 hover:bg-yellow-600"}`}>Go to Products →</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+// ── Overdue Due Modal ─────────────────────────────────────────────
+function OverdueDueModal({ overdueList, onClose, onGoToCustomers }: {
+  overdueList: OverdueCustomer[];
+  onClose: () => void;
+  onGoToCustomers: () => void;
+}) {
+  const totalDue = overdueList.reduce((s, o) => s + o.dueAmount, 0);
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[85vh] flex flex-col">
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 rounded-t-2xl bg-orange-50 border-b border-orange-100 flex-shrink-0">
+          <div>
+            <h3 className="text-lg font-bold text-orange-700">🔔 Overdue Balances · 30+ Days</h3>
+            <p className="text-sm text-orange-500 mt-0.5">
+              {overdueList.length} customer{overdueList.length !== 1 ? "s" : ""} · Total ₹{totalDue.toLocaleString("en-IN", { maximumFractionDigits: 2 })} pending
+            </p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+        </div>
+
+        {/* Table */}
+        <div className="flex-1 overflow-y-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-gray-400 text-xs uppercase tracking-wide sticky top-0">
+              <tr>
+                <th className="px-5 py-3 text-left">Shop</th>
+                <th className="px-5 py-3 text-left">Phone</th>
+                <th className="px-5 py-3 text-right">Due Amount</th>
+                <th className="px-5 py-3 text-right">Days Overdue</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {overdueList.map((o) => {
+                const urgency =
+                  o.daysOverdue >= 90 ? "text-red-600 bg-red-50" :
+                  o.daysOverdue >= 60 ? "text-orange-600 bg-orange-50" :
+                  "text-yellow-600 bg-yellow-50";
+                return (
+                  <tr key={o.customer.id} className="hover:bg-gray-50">
+                    <td className="px-5 py-3">
+                      <p className="font-medium text-gray-800">{o.customer.shopName}</p>
+                      <p className="text-xs text-gray-400">{o.customer.ownerName}</p>
+                    </td>
+                    <td className="px-5 py-3 text-gray-500 text-xs">{o.customer.phone}</td>
+                    <td className="px-5 py-3 text-right font-bold text-red-600">
+                      ₹{o.dueAmount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      <span className={`text-xs font-semibold px-2 py-1 rounded-full ${urgency}`}>
+                        {o.daysOverdue}d overdue
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot className="bg-gray-50 border-t border-gray-200">
+              <tr>
+                <td colSpan={2} className="px-5 py-3 text-xs font-semibold text-gray-500">Total Overdue</td>
+                <td className="px-5 py-3 text-right font-bold text-red-600">
+                  ₹{totalDue.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                </td>
+                <td />
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        {/* Footer */}
+        <div className="flex gap-3 px-6 py-4 border-t border-gray-100 flex-shrink-0">
+          <button onClick={onClose} className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm hover:bg-gray-50">
+            Close
+          </button>
+          <button onClick={onGoToCustomers} className="flex-1 bg-orange-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-orange-600">
+            Go to Customers →
+          </button>
         </div>
       </div>
     </div>
