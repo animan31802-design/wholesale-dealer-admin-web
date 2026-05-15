@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { db } from "../firebase/config";
+import QRCode from "qrcode";
 
 export interface BusinessSettings {
   businessName: string;
@@ -58,10 +59,34 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  // ── QR state ────────────────────────────────────────────────
+  const [testQr, setTestQr]         = useState<string>("");   // ₹1 test QR
+  const [standAloneQr, setStandAloneQr] = useState<string>(""); // no-amount QR
+
+  const generateQRs = useCallback(async (upiId: string) => {
+    if (!upiId.trim()) { setTestQr(""); setStandAloneQr(""); return; }
+    try {
+      const opts = { width: 160, margin: 1, color: { dark: "#000000", light: "#ffffff" } };
+      const [testUrl, standUrl] = await Promise.all([
+        QRCode.toDataURL(
+          `upi://pay?pa=${encodeURIComponent(upiId)}&pn=Test&am=1.00&cu=INR`,
+          opts
+        ),
+        QRCode.toDataURL(
+          `upi://pay?pa=${encodeURIComponent(upiId)}&cu=INR`,
+          opts
+        ),
+      ]);
+      setTestQr(testUrl);
+      setStandAloneQr(standUrl);
+    } catch { setTestQr(""); setStandAloneQr(""); }
+  }, []);
+
   useEffect(() => {
     getBusinessSettings().then((data) => {
       setForm(data);
       setLoading(false);
+      if (data.upiId) generateQRs(data.upiId);
     });
   }, []);
 
@@ -242,13 +267,71 @@ export default function Settings() {
             <Field label="UPI ID">
               <input
                 value={form.upiId}
-                onChange={(e) => set("upiId", e.target.value)}
+                onChange={(e) => {
+                  set("upiId", e.target.value);
+                  generateQRs(e.target.value);
+                }}
                 placeholder="yourname@upi"
                 className={inp}
               />
             </Field>
           </div>
         </Section>
+
+        {/* UPI QR Codes */}
+        {form.upiId && (
+          <Section title="UPI QR Codes">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+
+              {/* ₹1 Test QR */}
+              <div className="flex flex-col items-center bg-orange-50 border border-orange-100 rounded-xl p-5">
+                <p className="text-sm font-semibold text-orange-700 mb-1">₹1 Test QR</p>
+                <p className="text-xs text-orange-400 mb-3 text-center">
+                  Scan this to verify your UPI ID is working correctly
+                </p>
+                {testQr ? (
+                  <>
+                    <img src={testQr} alt="Test QR" className="w-36 h-36 rounded-lg border border-orange-200" />
+                    <p className="text-xs text-gray-400 mt-2 font-mono">{form.upiId}</p>
+                    <span className="mt-2 text-xs bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full font-medium">
+                      Amount: ₹1.00
+                    </span>
+                  </>
+                ) : (
+                  <div className="w-36 h-36 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 text-sm">
+                    Generating...
+                  </div>
+                )}
+              </div>
+
+              {/* Standalone Payment QR */}
+              <div className="flex flex-col items-center bg-green-50 border border-green-100 rounded-xl p-5">
+                <p className="text-sm font-semibold text-green-700 mb-1">Payment QR</p>
+                <p className="text-xs text-green-500 mb-3 text-center">
+                  Show this to customers — they type the amount in their UPI app
+                </p>
+                {standAloneQr ? (
+                  <>
+                    <img src={standAloneQr} alt="Payment QR" className="w-36 h-36 rounded-lg border border-green-200" />
+                    <p className="text-xs text-gray-400 mt-2 font-mono">{form.upiId}</p>
+                    <a
+                      href={standAloneQr}
+                      download={`payment-qr-${form.upiId}.png`}
+                      className="mt-2 text-xs bg-green-500 text-white px-3 py-1 rounded-full font-medium hover:bg-green-600 transition-all"
+                    >
+                      ⬇ Download QR
+                    </a>
+                  </>
+                ) : (
+                  <div className="w-36 h-36 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 text-sm">
+                    Generating...
+                  </div>
+                )}
+              </div>
+
+            </div>
+          </Section>
+        )}
 
         {/* Invoice Defaults */}
         <Section title="Invoice Defaults">

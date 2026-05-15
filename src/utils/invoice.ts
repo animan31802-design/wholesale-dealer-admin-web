@@ -1,5 +1,6 @@
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
+import QRCode from "qrcode";
 import { doc, getDoc, runTransaction, collection, getDocs } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Order, Customer, InvoiceType, BillingMode, OrderItem, Product } from "../types";
@@ -110,6 +111,29 @@ function computeLineAmounts(item: OrderItem, isGST: boolean) {
   return { taxableValue, lineCGST: 0, lineSGST: 0, lineTotal: taxableValue, gstPct: 0 };
 }
 
+// ─── UPI QR generator ─────────────────────────────────────────────────────────
+
+async function generateUpiQrDataUrl(
+  upiId: string,
+  businessName: string,
+  amount: number
+): Promise<string> {
+  try {
+    const upiString =
+      `upi://pay?pa=${encodeURIComponent(upiId)}` +
+      `&pn=${encodeURIComponent(businessName)}` +
+      `&am=${amount.toFixed(2)}` +
+      `&cu=INR`;
+    return await QRCode.toDataURL(upiString, {
+      width: 140,
+      margin: 1,
+      color: { dark: "#000000", light: "#ffffff" },
+    });
+  } catch {
+    return "";
+  }
+}
+
 // ─── HTML invoice builder ─────────────────────────────────────────────────────
 
 function buildInvoiceHTML(params: {
@@ -121,8 +145,9 @@ function buildInvoiceHTML(params: {
   showDue: boolean;
   historicalDue: number;
   advancePaid: number;
+  qrDataUrl?: string;
 }): string {
-  const { order, customer, biz, invoiceNumber, isGST, showDue, historicalDue, advancePaid } = params;
+  const { order, customer, biz, invoiceNumber, isGST, showDue, historicalDue, advancePaid, qrDataUrl } = params;
 
   const lineAmounts   = order.items.map((item) => computeLineAmounts(item, isGST));
   const totalTaxable  = round3(lineAmounts.reduce((s, a) => s + a.taxableValue, 0));
@@ -136,9 +161,8 @@ function buildInvoiceHTML(params: {
   const dateStr   = new Date(order.createdAt).toLocaleDateString("en-IN", {
     day: "2-digit", month: "2-digit", year: "numeric",
   });
-  const amountForWords = showDue && historicalDue > 0
-    ? computedTotal + historicalDue
-    : computedTotal;
+  // Words line shows the actual amount still owed — mirrors QR amount logic
+  const amountForWords = balanceOnDelivery > 0 ? balanceOnDelivery : totalPayable;
 
   // GST: 11 cols (1+2+1+1+1+1+1+1+1+1), Bill: 8 cols (1+3+1+1+1+1)
   const colspan = isGST ? 12 : 6;
@@ -216,15 +240,18 @@ function buildInvoiceHTML(params: {
 
   const dueRows = showDue && historicalDue > 0 ? `
     ${summaryRow("Previous Due", historicalDue.toFixed(2))}
-    ${summaryRow("Grand Total Payable", (computedTotal + historicalDue).toFixed(2), true)}
+    ${summaryRow("Total Payable", (computedTotal + historicalDue).toFixed(2), true)}
   ` : "";
 
   const advanceRow = advancePaid > 0
-    ? summaryRow("Advance Paid", advancePaid.toFixed(2))
+    ? summaryRow("Advance Paid", `- ${advancePaid.toFixed(2)}`)
     : "";
 
-  const balanceRow = advancePaid > 0 && balanceOnDelivery > 0
-    ? summaryRow("Balance Due", balanceOnDelivery.toFixed(2), true)
+  // The final amount the customer still owes — this is what the QR encodes too
+  const finalPayable = balanceOnDelivery;
+
+  const balanceRow = advancePaid > 0
+    ? summaryRow("Balance to Pay", finalPayable > 0 ? finalPayable.toFixed(2) : "NIL", true)
     : "";
 
   const bankDetails = isGST && (biz?.bankName || biz?.upiId) ? `
@@ -519,6 +546,12 @@ isGST
         justify-content:center;
       ">
 
+        ${qrDataUrl ? `
+        <div style="display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px;">
+          <img src="${qrDataUrl}" style="width:70px;height:70px;display:block;" />
+          <div style="font-size:7px;color:#555;text-align:center;">Scan to Pay</div>
+        </div>
+        ` : `
         <div style="
           width:70px;
           height:70px;
@@ -531,6 +564,7 @@ isGST
         ">
           QR
         </div>
+        `}
 
       </div>
 
@@ -584,6 +618,12 @@ isGST
         justify-content:center;
       ">
 
+        ${qrDataUrl ? `
+        <div style="display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px;">
+          <img src="${qrDataUrl}" style="width:70px;height:70px;display:block;" />
+          <div style="font-size:7px;color:#555;text-align:center;">Scan to Pay</div>
+        </div>
+        ` : `
         <div style="
           width:70px;
           height:70px;
@@ -596,6 +636,7 @@ isGST
         ">
           QR
         </div>
+        `}
 
       </div>
 
@@ -810,9 +851,9 @@ isGST
 
   `}
 
-  <!-- GRAND TOTAL -->
+  <!-- SUMMARY ROWS -->
 
-  ${summaryRow("GRAND TOTAL", computedTotal.toFixed(2), true)}
+  ${summaryRow("Bill Total", computedTotal.toFixed(2))}
 
   ${dueRows}
 
@@ -912,9 +953,25 @@ export async function buildInvoicePDF(
   const advancePaid: number = (order as any).advancePaid ?? order.amountCollected ?? 0;
   const invoiceNumber       = order.invoiceNumber || (await getNextInvoiceNumber(prefix));
 
+  // ── Compute amounts for QR ────────────────────────────────────
+  // Mirrors the same logic as buildInvoiceHTML so QR matches what's printed
+  const computedTotal = round2(enrichedOrder.items.reduce((s, item) => {
+    const { lineTotal } = computeLineAmounts(item, isGST);
+    return s + lineTotal;
+  }, 0));
+  const totalPayable      = computedTotal + (showDue ? historicalDue : 0);
+  const balanceOnDelivery = Math.max(0, round2(totalPayable - advancePaid));
+  // QR amount = what the customer still owes at the point of delivery
+  const qrAmount = balanceOnDelivery;
+
+  // ── Generate UPI QR if UPI ID is configured ──────────────────
+  const qrDataUrl = biz?.upiId && qrAmount > 0
+    ? await generateUpiQrDataUrl(biz.upiId, biz.businessName || "Payment", qrAmount)
+    : "";
+
   const html = buildInvoiceHTML({
     order: enrichedOrder, customer, biz, invoiceNumber,
-    isGST, showDue, historicalDue, advancePaid,
+    isGST, showDue, historicalDue, advancePaid, qrDataUrl,
   });
 
   // Mount off-screen
