@@ -424,9 +424,20 @@ ${skipped} rows skipped (missing shop name or phone)`);
                       </div>
                     )}
                   </div>
-                  <button type="button" onClick={() => setShowMap(true)} className="bg-blue-500 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-600 whitespace-nowrap">
-                    🗺️ {form.lat ? "Change" : "Pick Location"}
-                  </button>
+                  <div className="flex flex-col gap-2">
+                    <button type="button" onClick={() => setShowMap(true)} className="bg-blue-500 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-600 whitespace-nowrap">
+                      🗺️ {form.lat ? "Change" : "Pick Location"}
+                    </button>
+                    {form.lat && (
+                      <button
+                        type="button"
+                        onClick={() => setForm({ ...form, lat: undefined, lng: undefined, locationAddress: "" })}
+                        className="border border-red-200 text-red-500 px-4 py-2 rounded-lg text-sm hover:bg-red-50 whitespace-nowrap"
+                      >
+                        🗑 Clear
+                      </button>
+                    )}
+                  </div>
                 </div>
               </Sec>
               <Sec title="Notes">
