@@ -39,6 +39,7 @@ export default function Orders() {
   const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set());
   const [showBulkAssign, setShowBulkAssign] = useState(false);
   const [returnOrder, setReturnOrder]     = useState<Order | null>(null);
+  const [smartRegionMatch, setSmartRegionMatch] = useState(true);
   const { user } = useAuthStore();
   const navigate = useNavigate();
 
@@ -270,6 +271,18 @@ export default function Orders() {
               className="flex items-center gap-1.5 border border-gray-300 text-gray-600 px-3 py-1.5 rounded-lg text-xs hover:bg-gray-50"
             >
               ⬇️ Export Excel
+            </button>
+            <button
+              onClick={() => setSmartRegionMatch(p => !p)}
+              title={smartRegionMatch ? "Smart region matching ON — matched delivery agents highlighted in assign modal" : "Smart region matching OFF"}
+              className={`flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
+                smartRegionMatch
+                  ? "bg-green-50 border-green-300 text-green-700"
+                  : "bg-gray-50 border-gray-200 text-gray-400"
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full inline-block ${smartRegionMatch ? "bg-green-500" : "bg-gray-300"}`} />
+              Region Match
             </button>
             <button
               onClick={() => setSoundEnabled(p => !p)}
@@ -538,6 +551,8 @@ export default function Orders() {
           deliveryUsers={deliveryUsers}
           onAssign={bulkAssignDelivery}
           onClose={() => setShowBulkAssign(false)}
+          smartRegionMatch={smartRegionMatch}
+          selectedOrders={[...selectedIds].map(id => orders.find(o => o.id === id)).filter(Boolean) as Order[]}
         />
       )}
 
@@ -565,7 +580,8 @@ export default function Orders() {
       )}
       {selectedOrder && (
         <AssignDeliveryModal order={selectedOrder} deliveryUsers={deliveryUsers}
-          onAssign={assignDelivery} onClose={() => setSelectedOrder(null)} />
+          onAssign={assignDelivery} onClose={() => setSelectedOrder(null)}
+          smartRegionMatch={smartRegionMatch} />
       )}
     </div>
   );
@@ -781,13 +797,24 @@ Thank you!`
 }
 
 // ── Assign Delivery Modal ─────────────────────────────────────────
-function AssignDeliveryModal({ order, deliveryUsers, onAssign, onClose }: {
+function AssignDeliveryModal({ order, deliveryUsers, onAssign, onClose, smartRegionMatch }: {
   order: Order; deliveryUsers: AppUser[];
   onAssign: (orderId: string, person: AppUser, vehicle: string) => void;
   onClose: () => void;
+  smartRegionMatch?: boolean;
 }) {
   const [selectedPerson, setSelectedPerson] = useState<AppUser | null>(null);
   const [vehicleNumber, setVehicleNumber]   = useState("");
+
+  // Split agents into region-matched and others when smart matching is on
+  const orderRegionId = (order as any).regionId as string | undefined;
+  const matchedAgents = smartRegionMatch && orderRegionId
+    ? deliveryUsers.filter(u => u.assignedRegions?.includes(orderRegionId))
+    : [];
+  const otherAgents = smartRegionMatch && orderRegionId
+    ? deliveryUsers.filter(u => !u.assignedRegions?.includes(orderRegionId))
+    : deliveryUsers;
+  const hasMatches = matchedAgents.length > 0;
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -795,21 +822,71 @@ function AssignDeliveryModal({ order, deliveryUsers, onAssign, onClose }: {
         <h3 className="text-lg font-semibold text-gray-800 mb-1">Assign Delivery Agent</h3>
         <p className="text-sm text-gray-500 mb-4">
           Order for: <strong>{order.customerName}</strong> · ₹{order.totalAmount.toFixed(2)}
+          {(order as any).regionName && <span className="ml-2 bg-gray-100 text-gray-500 text-xs px-2 py-0.5 rounded-full">{(order as any).regionName}</span>}
         </p>
         <div className="bg-blue-50 border border-blue-100 rounded-lg px-4 py-3 text-xs text-blue-700 mb-4">
           ℹ️ Status becomes <strong>Assigned</strong>. Moves to <strong>Out for Delivery</strong> only after agent confirms collection.
         </div>
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Delivery Agent</label>
-            <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-              onChange={(e) => setSelectedPerson(deliveryUsers.find((u) => u.uid === e.target.value) || null)}>
-              <option value="">— Select agent —</option>
-              {deliveryUsers.map((u) => <option key={u.uid} value={u.uid}>{u.name}</option>)}
-            </select>
+
+        {/* Smart region match section */}
+        {smartRegionMatch && orderRegionId && (
+          <div className="mb-4">
+            {hasMatches ? (
+              <div>
+                <p className="text-xs font-semibold text-green-700 mb-2 flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+                  Region-matched agents ({matchedAgents.length})
+                </p>
+                <div className="space-y-2 mb-3">
+                  {matchedAgents.map((u) => (
+                    <button key={u.uid} type="button"
+                      onClick={() => setSelectedPerson(selectedPerson?.uid === u.uid ? null : u)}
+                      className={`w-full flex items-center justify-between px-4 py-2.5 rounded-xl border-2 text-sm font-medium transition-all ${
+                        selectedPerson?.uid === u.uid
+                          ? "border-green-500 bg-green-50 text-green-800"
+                          : "border-green-200 bg-green-50/50 text-gray-700 hover:border-green-400"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-green-600">🎯</span>
+                        <span>{u.name}</span>
+                        {u.phone && <span className="text-xs text-gray-400">{u.phone}</span>}
+                      </div>
+                      {selectedPerson?.uid === u.uid && <span className="text-green-600 text-base">✓</span>}
+                    </button>
+                  ))}
+                </div>
+                {otherAgents.length > 0 && (
+                  <p className="text-xs text-gray-400 mb-2">Other agents</p>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-3">
+                ⚠️ No delivery agent is assigned to <strong>{(order as any).regionName || "this region"}</strong>. You can still assign any agent below.
+              </p>
+            )}
           </div>
+        )}
+
+        <div className="space-y-4">
+          {/* Only show the dropdown when no card is selected (or there are no matched cards) */}
+          {!(smartRegionMatch && hasMatches && selectedPerson && matchedAgents.some(m => m.uid === selectedPerson.uid)) && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                {hasMatches && smartRegionMatch ? "Other agents" : "Delivery Agent"}
+              </label>
+              <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                value={selectedPerson && !matchedAgents.some(m => m.uid === selectedPerson.uid) ? selectedPerson.uid : ""}
+                onChange={(e) => setSelectedPerson(deliveryUsers.find((u) => u.uid === e.target.value) || null)}>
+                <option value="">— Select agent —</option>
+                {(smartRegionMatch && hasMatches ? otherAgents : deliveryUsers).map((u) => (
+                  <option key={u.uid} value={u.uid}>{u.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Vehicle Number</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Vehicle Number <span className="text-gray-400 font-normal">(optional)</span></label>
             <input type="text" value={vehicleNumber}
               onChange={(e) => setVehicleNumber(e.target.value.toUpperCase())}
               placeholder="TN 01 AB 1234"
@@ -819,8 +896,8 @@ function AssignDeliveryModal({ order, deliveryUsers, onAssign, onClose }: {
         <div className="flex gap-3 mt-6">
           <button onClick={onClose}
             className="flex-1 border border-gray-300 text-gray-600 py-2 rounded-lg text-sm hover:bg-gray-50">Cancel</button>
-          <button onClick={() => selectedPerson && vehicleNumber && onAssign(order.id!, selectedPerson, vehicleNumber)}
-            disabled={!selectedPerson || !vehicleNumber}
+          <button onClick={() => selectedPerson && onAssign(order.id!, selectedPerson, vehicleNumber)}
+            disabled={!selectedPerson}
             className="flex-1 bg-orange-500 text-white py-2 rounded-lg text-sm hover:bg-orange-600 disabled:opacity-50">Assign</button>
         </div>
       </div>
@@ -1219,18 +1296,22 @@ function BulkAssignModal({
   deliveryUsers,
   onAssign,
   onClose,
+  smartRegionMatch,
+  selectedOrders,
 }: {
   count: number;
   deliveryUsers: AppUser[];
   onAssign: (person: AppUser, vehicle: string) => Promise<void>;
   onClose: () => void;
+  smartRegionMatch?: boolean;
+  selectedOrders?: Order[];
 }) {
   const [selectedPerson, setSelectedPerson] = useState<AppUser | null>(null);
   const [vehicleNumber, setVehicleNumber]   = useState("");
   const [saving, setSaving]                 = useState(false);
 
   const handleAssign = async () => {
-    if (!selectedPerson || !vehicleNumber.trim()) return;
+    if (!selectedPerson) return;
     setSaving(true);
     try {
       await onAssign(selectedPerson, vehicleNumber.trim());
@@ -1241,33 +1322,100 @@ function BulkAssignModal({
     }
   };
 
+  // For bulk: find regions across all selected orders and match agents
+  const selectedRegionIds = smartRegionMatch && selectedOrders
+    ? [...new Set(selectedOrders.map(o => (o as any).regionId).filter(Boolean))]
+    : [];
+  // Agent must cover ALL selected regions to be suggested (not just some)
+  const matchedAgents = selectedRegionIds.length > 0
+    ? deliveryUsers.filter(u => selectedRegionIds.every(rid => u.assignedRegions?.includes(rid)))
+    : [];
+  const otherAgents = deliveryUsers.filter(u => !matchedAgents.some(m => m.uid === u.uid));
+  const hasMatches = matchedAgents.length > 0;
+
+  // Unique region names from selected orders for display
+  const regionNames = selectedOrders
+    ? [...new Set(selectedOrders.map(o => (o as any).regionName).filter(Boolean))]
+    : [];
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
         <h3 className="text-lg font-semibold text-gray-800 mb-1">Bulk Assign Delivery</h3>
-        <p className="text-sm text-gray-500 mb-4">
+        <p className="text-sm text-gray-500 mb-1">
           Assigning <span className="font-semibold text-indigo-600">{count} packed order{count !== 1 ? "s" : ""}</span> to one delivery agent
         </p>
+        {regionNames.length > 0 && (
+          <div className="flex flex-wrap gap-1 mb-3">
+            {regionNames.map(name => (
+              <span key={name} className="bg-gray-100 text-gray-500 text-xs px-2 py-0.5 rounded-full">{name}</span>
+            ))}
+          </div>
+        )}
 
-        <div className="bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-3 text-xs text-indigo-700 mb-5">
+        <div className="bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-3 text-xs text-indigo-700 mb-4">
           ℹ️ All selected orders will be assigned to the same agent and vehicle. Status will change to <strong>Assigned</strong>. Agent must confirm collection in their app.
         </div>
 
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Delivery Agent</label>
-            <select
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
-              onChange={(e) => setSelectedPerson(deliveryUsers.find((u) => u.uid === e.target.value) || null)}
-            >
-              <option value="">— Select agent —</option>
-              {deliveryUsers.map((u) => (
-                <option key={u.uid} value={u.uid}>{u.name}</option>
-              ))}
-            </select>
+        {/* Smart region match section */}
+        {smartRegionMatch && selectedRegionIds.length > 0 && (
+          <div className="mb-4">
+            {hasMatches ? (
+              <div>
+                <p className="text-xs font-semibold text-green-700 mb-2 flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+                  Region-matched agents ({matchedAgents.length})
+                </p>
+                <div className="space-y-2 mb-3">
+                  {matchedAgents.map((u) => (
+                    <button key={u.uid} type="button"
+                      onClick={() => setSelectedPerson(selectedPerson?.uid === u.uid ? null : u)}
+                      className={`w-full flex items-center justify-between px-4 py-2.5 rounded-xl border-2 text-sm font-medium transition-all ${
+                        selectedPerson?.uid === u.uid
+                          ? "border-green-500 bg-green-50 text-green-800"
+                          : "border-green-200 bg-green-50/50 text-gray-700 hover:border-green-400"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-green-600">🎯</span>
+                        <span>{u.name}</span>
+                        {u.phone && <span className="text-xs text-gray-400">{u.phone}</span>}
+                      </div>
+                      {selectedPerson?.uid === u.uid && <span className="text-green-600 text-base">✓</span>}
+                    </button>
+                  ))}
+                </div>
+                {otherAgents.length > 0 && <p className="text-xs text-gray-400 mb-2">Other agents</p>}
+              </div>
+            ) : (
+              <p className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-3">
+                ⚠️ No delivery agent is assigned to these regions. You can still assign any agent below.
+              </p>
+            )}
           </div>
+        )}
+
+        <div className="space-y-4">
+          {/* Hide dropdown when a matched card is already selected */}
+          {!(smartRegionMatch && hasMatches && selectedPerson && matchedAgents.some(m => m.uid === selectedPerson.uid)) && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                {hasMatches && smartRegionMatch ? "Other agents" : "Delivery Agent"}
+              </label>
+              <select
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                value={selectedPerson && !matchedAgents.some(m => m.uid === selectedPerson.uid) ? selectedPerson.uid : ""}
+                onChange={(e) => setSelectedPerson(deliveryUsers.find((u) => u.uid === e.target.value) || null)}
+              >
+                <option value="">— Select agent —</option>
+                {(smartRegionMatch && hasMatches ? otherAgents : deliveryUsers).map((u) => (
+                  <option key={u.uid} value={u.uid}>{u.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Vehicle Number</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Vehicle Number <span className="text-gray-400 font-normal">(optional)</span></label>
             <input
               type="text"
               value={vehicleNumber}
@@ -1278,9 +1426,9 @@ function BulkAssignModal({
           </div>
         </div>
 
-        {selectedPerson && vehicleNumber && (
+        {selectedPerson && (
           <div className="mt-4 bg-gray-50 rounded-lg px-4 py-3 text-sm text-gray-600">
-            <span className="font-medium">{count} order{count !== 1 ? "s" : ""}</span> → <span className="font-medium text-indigo-600">{selectedPerson.name}</span> · {vehicleNumber}
+            <span className="font-medium">{count} order{count !== 1 ? "s" : ""}</span> → <span className="font-medium text-indigo-600">{selectedPerson.name}</span>{vehicleNumber ? ` · ${vehicleNumber}` : ""}
           </div>
         )}
 
@@ -1293,7 +1441,7 @@ function BulkAssignModal({
           </button>
           <button
             onClick={handleAssign}
-            disabled={!selectedPerson || !vehicleNumber.trim() || saving}
+            disabled={!selectedPerson || saving}
             className="flex-1 bg-indigo-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-indigo-600 disabled:opacity-50"
           >
             {saving ? "Assigning..." : `Assign ${count} Order${count !== 1 ? "s" : ""}`}

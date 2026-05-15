@@ -261,7 +261,7 @@ export default function Users() {
       {loading ? <p className="text-gray-400">Loading...</p> : (
         <div className="space-y-8">
           <UserTable title="Field Agents" userList={fieldAgents} showRegions={true} />
-          <UserTable title="Delivery Agents" userList={deliveryAgents} showRegions={false} />
+          <UserTable title="Delivery Agents" userList={deliveryAgents} showRegions={true} />
           <UserTable title="Packing Staff" userList={packingStaff} showRegions={false} />
           <UserTable title="Admins" userList={admins} showRegions={false} />
         </div>
@@ -373,7 +373,12 @@ export default function Users() {
               <h3 className="text-lg font-semibold text-gray-800">Manage Regions</h3>
               <button onClick={() => setShowRegionModal(false)} className="text-gray-400 hover:text-gray-600">✕</button>
             </div>
-            <p className="text-sm text-gray-500 mb-1">Agent: <strong>{selectedAgent.name}</strong></p>
+            <p className="text-sm text-gray-500 mb-1">{selectedAgent.role === "delivery" ? "Delivery Agent" : "Agent"}: <strong>{selectedAgent.name}</strong></p>
+            {selectedAgent.role === "delivery" && (
+              <p className="text-xs text-blue-500 bg-blue-50 px-3 py-1.5 rounded-lg mb-2">
+                🚚 Regions are optional for delivery agents. When assigned, their name will be highlighted in the assign modal for matching orders.
+              </p>
+            )}
 
             {/* Currently assigned summary */}
             <div className="mb-4">

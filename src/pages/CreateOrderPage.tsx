@@ -443,16 +443,12 @@ export default function CreateOrderPage() {
   // ── Load customers, products, frequent ids ──────────────────────
   useEffect(() => {
     let unsubProducts: (() => void) | null = null;
+    let unsubCustomers: (() => void) | null = null;
 
     const init = async () => {
       setLoading(true);
       try {
-        const [custSnap, ordersSnap] = await Promise.all([
-          getDocs(query(collection(db, "customers"), orderBy("shopName"))),
-          getDocs(query(collection(db, "orders"), orderBy("createdAt", "desc"))),
-        ]);
-
-        setCustomers(custSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Customer)));
+        const ordersSnap = await getDocs(query(collection(db, "orders"), orderBy("createdAt", "desc")));
 
         // Compute frequent product ids from last 100 orders
         const freq: Record<string, number> = {};
@@ -473,6 +469,15 @@ export default function CreateOrderPage() {
       }
     };
 
+    // Real-time customers — so outstandingDue is always fresh after order placement
+    unsubCustomers = onSnapshot(
+      query(collection(db, "customers"), orderBy("shopName")),
+      (snap) => {
+        setCustomers(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Customer)));
+        setLoading(false);
+      }
+    );
+
     // Real-time products so stock is always live
     unsubProducts = onSnapshot(
       query(collection(db, "products"), orderBy("name")),
@@ -480,7 +485,7 @@ export default function CreateOrderPage() {
     );
 
     init();
-    return () => { unsubProducts?.(); };
+    return () => { unsubProducts?.(); unsubCustomers?.(); };
   }, []);
 
   useEffect(() => {
