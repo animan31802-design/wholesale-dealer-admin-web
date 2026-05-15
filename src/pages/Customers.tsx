@@ -199,10 +199,36 @@ ${skipped} rows skipped (missing shop name or phone)`);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // ── Phone validation: must be 10 digits ──────────────────────
+    const phoneDigits = form.phone.replace(/\D/g, "");
+    if (phoneDigits.length !== 10) {
+      alert("Please enter a valid 10-digit phone number.");
+      return;
+    }
+
+    // ── Alternate phone: if provided, must also be 10 digits ─────
+    if (form.alternatePhone) {
+      const altDigits = form.alternatePhone.replace(/\D/g, "");
+      if (altDigits.length !== 10) {
+        alert("Please enter a valid 10-digit alternate phone number.");
+        return;
+      }
+    }
+
+    // ── GSTIN validation (optional, but if provided must match format) ──
+    if (form.gstin && form.gstin.trim()) {
+      const gstinRegex = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+      if (!gstinRegex.test(form.gstin.trim().toUpperCase())) {
+        alert("Please enter a valid GSTIN (e.g. 33AAAAA0000A1Z5).");
+        return;
+      }
+    }
+
     if (editId) {
-      await updateDoc(doc(db, "customers", editId), { ...form });
+      await updateDoc(doc(db, "customers", editId), { ...form, gstin: form.gstin?.trim().toUpperCase() || "" });
     } else {
-      await addDoc(collection(db, "customers"), { ...form, outstandingDue: 0, createdAt: new Date().toISOString() });
+      await addDoc(collection(db, "customers"), { ...form, gstin: form.gstin?.trim().toUpperCase() || "", outstandingDue: 0, createdAt: new Date().toISOString() });
     }
     setForm(emptyCustomer()); setEditId(null); setShowForm(false); fetchAll();
   };
@@ -387,10 +413,36 @@ ${skipped} rows skipped (missing shop name or phone)`);
                 <Fld label="Shop Name *"><input value={form.shopName} onChange={(e) => setForm({ ...form, shopName: e.target.value })} required placeholder="e.g. Sri Murugan Stores" className={inp} /></Fld>
                 <Fld label="Owner Name *"><input value={form.ownerName} onChange={(e) => setForm({ ...form, ownerName: e.target.value })} required placeholder="e.g. Ravi Kumar" className={inp} /></Fld>
                 <div className="grid grid-cols-2 gap-4">
-                  <Fld label="Phone *"><input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} required className={inp} /></Fld>
-                  <Fld label="Alternate Phone"><input value={form.alternatePhone || ""} onChange={(e) => setForm({ ...form, alternatePhone: e.target.value })} className={inp} /></Fld>
+                  <Fld label="Phone *">
+                    <input
+                      value={form.phone}
+                      onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                      required
+                      placeholder="10-digit mobile number"
+                      maxLength={15}
+                      className={inp}
+                    />
+                  </Fld>
+                  <Fld label="Alternate Phone">
+                    <input
+                      value={form.alternatePhone || ""}
+                      onChange={(e) => setForm({ ...form, alternatePhone: e.target.value })}
+                      placeholder="Optional"
+                      maxLength={15}
+                      className={inp}
+                    />
+                  </Fld>
                 </div>
-                <Fld label="GSTIN"><input value={form.gstin || ""} onChange={(e) => setForm({ ...form, gstin: e.target.value })} className={inp} /></Fld>
+                <Fld label="GSTIN">
+                  <input
+                    value={form.gstin || ""}
+                    onChange={(e) => setForm({ ...form, gstin: e.target.value.toUpperCase() })}
+                    placeholder="e.g. 33AAAAA0000A1Z5"
+                    maxLength={15}
+                    className={inp}
+                  />
+                  <p className="text-xs text-gray-400 mt-1">15-character GST number (optional)</p>
+                </Fld>
               </Sec>
               <Sec title="Region & Area">
                 <Fld label="Region *">

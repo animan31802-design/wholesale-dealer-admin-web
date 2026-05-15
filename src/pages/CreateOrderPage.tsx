@@ -443,12 +443,16 @@ export default function CreateOrderPage() {
   // ── Load customers, products, frequent ids ──────────────────────
   useEffect(() => {
     let unsubProducts: (() => void) | null = null;
-    let unsubCustomers: (() => void) | null = null;
 
     const init = async () => {
       setLoading(true);
       try {
-        const ordersSnap = await getDocs(query(collection(db, "orders"), orderBy("createdAt", "desc")));
+        const [custSnap, ordersSnap] = await Promise.all([
+          getDocs(query(collection(db, "customers"), orderBy("shopName"))),
+          getDocs(query(collection(db, "orders"), orderBy("createdAt", "desc"))),
+        ]);
+
+        setCustomers(custSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Customer)));
 
         // Compute frequent product ids from last 100 orders
         const freq: Record<string, number> = {};
@@ -469,15 +473,6 @@ export default function CreateOrderPage() {
       }
     };
 
-    // Real-time customers — so outstandingDue is always fresh after order placement
-    unsubCustomers = onSnapshot(
-      query(collection(db, "customers"), orderBy("shopName")),
-      (snap) => {
-        setCustomers(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Customer)));
-        setLoading(false);
-      }
-    );
-
     // Real-time products so stock is always live
     unsubProducts = onSnapshot(
       query(collection(db, "products"), orderBy("name")),
@@ -485,7 +480,7 @@ export default function CreateOrderPage() {
     );
 
     init();
-    return () => { unsubProducts?.(); unsubCustomers?.(); };
+    return () => { unsubProducts?.(); };
   }, []);
 
   useEffect(() => {
@@ -654,12 +649,24 @@ export default function CreateOrderPage() {
         });
 
         // ── WRITE PHASE ───────────────────────────────────────────
-        // Reserve stock on each tracked product
+        // Reserve stock on each tracked product.
+        // The availability check above ran inside the transaction (read phase),
+        // so this write is atomic with that check — no race condition possible.
         productSnaps.forEach((snap, i) => {
           const data = snap.data() as Product;
           if (!data.trackInventory) return;
+          const newReserved = (data.reservedStock ?? 0) + billItems[i].quantity;
+          // ── Fix 9: never allow reservedStock to push available stock negative ──
+          const newAvail = data.stock - newReserved - (
+            data.safetyBuffer?.type === "fixed"
+              ? (data.safetyBuffer?.value ?? 0)
+              : ((data.safetyBuffer?.value ?? 0) / 100) * data.stock
+          );
+          if (newAvail < -0.01) {
+            throw new Error(`"${billItems[i].productName}" stock would go negative — please refresh and try again.`);
+          }
           t.update(productRefs[i], {
-            reservedStock: (data.reservedStock ?? 0) + billItems[i].quantity,
+            reservedStock: Math.max(0, newReserved),
           });
         });
 

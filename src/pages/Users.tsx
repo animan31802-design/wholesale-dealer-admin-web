@@ -1,12 +1,13 @@
 import { useEffect, useState, useMemo } from "react";
 import { collection, getDocs, setDoc, doc, updateDoc, orderBy, query } from "firebase/firestore";
 import { createUserWithEmailAndPassword } from "firebase/auth";
-import { initializeApp } from "firebase/app";
+import { initializeApp, deleteApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { db } from "../firebase/config";
 import { AppUser, UserRole, Region } from "../types";
 import { useTamilSearch } from "../utils/UseTamilSearch";
 import { TamilSearchInput } from "../components/TamilSearchInput";
+import { useAuthStore } from "../store/authStore";
 
 export default function Users() {
   const [users, setUsers] = useState<AppUser[]>([]);
@@ -20,6 +21,9 @@ export default function Users() {
   const [error, setError] = useState("");
   const [editUser, setEditUser] = useState<AppUser | null>(null);
   const [editForm, setEditForm] = useState({ name: "", phone: "", role: "field_agent" as UserRole });
+
+  // Current logged-in admin (used for self-protection checks)
+  const { user: currentUser } = useAuthStore();
 
   // ── Tamil-aware search ────────────────────────────────────────────────────
   // Searches name, email, phone. Works with English typing for Tamil names.
@@ -60,6 +64,22 @@ export default function Users() {
   const handleUpdateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editUser) return;
+
+    // ── Self-protection: prevent changing your own role ───────────
+    if (editUser.uid === currentUser?.uid && editForm.role !== editUser.role) {
+      alert("You cannot change your own role.");
+      return;
+    }
+
+    // ── Last-admin guard: don't allow demoting the only admin ─────
+    if (editUser.role === "admin" && editForm.role !== "admin") {
+      const adminCount = users.filter((u) => u.role === "admin").length;
+      if (adminCount <= 1) {
+        alert("Cannot demote the only admin. Promote another user to admin first.");
+        return;
+      }
+    }
+
     setSubmitting(true);
     try {
       await updateDoc(doc(db, "users", editUser.uid), {
@@ -80,16 +100,16 @@ export default function Users() {
     e.preventDefault();
     setError("");
     setSubmitting(true);
+    const secondaryApp = initializeApp(
+      {
+        apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+        authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+        projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+      },
+      `secondary-${Date.now()}`
+    );
+    const secondaryAuth = getAuth(secondaryApp);
     try {
-      const secondaryApp = initializeApp(
-        {
-          apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-          authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-          projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-        },
-        `secondary-${Date.now()}`
-      );
-      const secondaryAuth = getAuth(secondaryApp);
       const result = await createUserWithEmailAndPassword(secondaryAuth, form.email, form.password);
       const newUser: AppUser = {
         uid: result.user.uid,
@@ -98,6 +118,7 @@ export default function Users() {
         role: form.role,
         phone: form.phone,
         assignedRegions: [],
+        isActive: true,
         createdAt: new Date().toISOString(),
       };
       await setDoc(doc(db, "users", result.user.uid), newUser);
@@ -108,6 +129,8 @@ export default function Users() {
     } catch (err: any) {
       setError(err.message || "Failed to create user.");
     } finally {
+      // Always clean up the secondary app to prevent auth session & memory leak
+      await deleteApp(secondaryApp).catch(() => {});
       setSubmitting(false);
     }
   };
@@ -344,12 +367,16 @@ export default function Users() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
                 <select value={editForm.role}
                   onChange={(e) => setEditForm({ ...editForm, role: e.target.value as UserRole })}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                  disabled={editUser?.uid === currentUser?.uid}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm disabled:opacity-50 disabled:bg-gray-50">
                   <option value="admin">Admin</option>
                   <option value="packing_staff">Packing Staff</option>
                   <option value="field_agent">Field Agent</option>
                   <option value="delivery">Delivery Agent</option>
                 </select>
+                {editUser?.uid === currentUser?.uid && (
+                  <p className="text-xs text-amber-600 mt-1">⚠️ You cannot change your own role.</p>
+                )}
               </div>
               <p className="text-xs text-gray-400">⚠️ Password cannot be changed here. User must reset via email.</p>
               <div className="flex gap-3 mt-2">

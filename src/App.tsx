@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { onAuthStateChanged } from "firebase/auth";
+import { onAuthStateChanged, signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "./firebase/config";
 import { useAuthStore } from "./store/authStore";
@@ -64,7 +64,16 @@ export default function App() {
       if (firebaseUser) {
         const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
         if (userDoc.exists()) {
-          setUser(userDoc.data() as AppUser);
+          const userData = userDoc.data() as AppUser;
+          // ── isActive enforcement ──────────────────────────────
+          // If an admin deactivates a user who is currently logged in,
+          // the next auth state refresh will sign them out automatically.
+          if (userData.isActive === false) {
+            await signOut(auth);
+            logout();
+          } else {
+            setUser(userData);
+          }
         } else {
           logout();
         }
