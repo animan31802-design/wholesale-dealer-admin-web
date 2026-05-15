@@ -57,6 +57,63 @@ function fmtQty(v: number): string   { return Number.isInteger(v) ? String(v) : 
 function round2(v: number): number   { return Math.round(v * 100) / 100; }
 function fmtRupees(v: number): string { return `₹${fmtPrice(v)}`; }
 
+// ── WhatsApp order message builder ───────────────────────────────
+function buildWhatsAppMessage(params: {
+  businessName: string;
+  orderId: string;
+  customerName: string;
+  items: OrderItem[];
+  grandTotal: number;
+  advancePaid: number;
+  prevBalance: number;
+}): string {
+  const { businessName, orderId, customerName, items, grandTotal, advancePaid, prevBalance } = params;
+  const balanceDue = round2(grandTotal - advancePaid);
+  const shortId    = orderId.slice(0, 8).toUpperCase();
+
+  const itemLines = items.map((item, i) =>
+    `  ${i + 1}. ${item.productName}\n     ${fmtQty(item.quantity)} ${item.unit} × ₹${fmtPrice(item.price)} = ₹${fmtPrice(item.total)}`
+  ).join("\n");
+
+  const lines: string[] = [
+    `🧾 *Order Confirmation*`,
+    `*${businessName}*`,
+    ``,
+    `Hello *${customerName}*,`,
+    `Your order has been placed successfully.`,
+    ``,
+    `*Order ID:* ${shortId}`,
+    ``,
+    `*Items:*`,
+    itemLines,
+    ``,
+    `*Bill Total:*  ₹${fmtPrice(grandTotal)}`,
+  ];
+
+  if (prevBalance > 0) {
+    lines.push(`*Previous Due:*  ₹${fmtPrice(prevBalance)}`);
+    lines.push(`*Total Payable:*  ₹${fmtPrice(grandTotal + prevBalance)}`);
+  }
+
+  if (advancePaid > 0) {
+    lines.push(`*Advance Paid:*  ₹${fmtPrice(advancePaid)}`);
+    lines.push(`*Balance to Pay:*  ₹${fmtPrice(balanceDue > 0 ? balanceDue : 0)}`);
+  }
+
+  lines.push(``);
+  lines.push(`Thank you for your order! 🙏`);
+
+  return lines.join("\n");
+}
+
+function openWhatsApp(phone: string, message: string): void {
+  // Normalize phone: strip non-digits, add 91 country code if not present
+  const digits = phone.replace(/\D/g, "");
+  const normalized = digits.startsWith("91") && digits.length === 12 ? digits : `91${digits}`;
+  const url = `https://wa.me/${normalized}?text=${encodeURIComponent(message)}`;
+  window.open(url, "_blank");
+}
+
 // Module-level draft store — survives re-renders, cleared on order save
 const draftStore: Record<string, Record<string, number>> = {};
 
@@ -362,6 +419,9 @@ export default function CreateOrderPage() {
   const [message, setMessage]       = useState("");
   const [isSaving, setIsSaving]     = useState(false);
   const [lastOrderId, setLastOrderId] = useState<string | null>(null);
+  const [whatsappData, setWhatsappData] = useState<{
+    phone: string; message: string;
+  } | null>(null);
 
   // UI state
   const [selectedCategory, setSelectedCategory] = useState("All");
@@ -656,6 +716,27 @@ export default function CreateOrderPage() {
       // Success
       delete draftStore[customer.id!];
       setLastOrderId(newOrderId);
+
+      // ── WhatsApp notification if customer has a phone number ──
+      if (customer.phone) {
+        const biz = await import("../firebase/config").then(async () => {
+          const { getDoc, doc: fsDoc } = await import("firebase/firestore");
+          const snap = await getDoc(fsDoc(db, "settings", "business"));
+          return snap.exists() ? (snap.data() as { businessName?: string }) : null;
+        }).catch(() => null);
+
+        const waMsg = buildWhatsAppMessage({
+          businessName: biz?.businessName || "Our Store",
+          orderId:      newOrderId,
+          customerName: customer.shopName,
+          items:        billItems,
+          grandTotal:   round2(grandTotal),
+          advancePaid:  paid,
+          prevBalance,
+        });
+        setWhatsappData({ phone: customer.phone, message: waMsg });
+      }
+
       setCartQty({});
       setPaidAmount("");
       setNotes("");
@@ -759,6 +840,31 @@ export default function CreateOrderPage() {
             <div>
               <p className="text-sm font-semibold text-green-700">Order placed successfully!</p>
               <p className="text-xs text-green-500">Order ID: {lastOrderId.slice(0, 12)}…</p>
+            </div>
+          </div>
+        )}
+
+        {/* WhatsApp notification prompt */}
+        {whatsappData && (
+          <div className="flex items-center gap-3 bg-[#e9fbe5] border border-[#25d366]/40 rounded-xl px-4 py-3 mb-5">
+            <span className="text-2xl flex-shrink-0">💬</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-gray-800">Send order details on WhatsApp?</p>
+              <p className="text-xs text-gray-500 truncate">{whatsappData.phone}</p>
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              <button
+                onClick={() => { openWhatsApp(whatsappData.phone, whatsappData.message); setWhatsappData(null); }}
+                className="bg-[#25d366] text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-[#1ebe5d] transition-all"
+              >
+                Send
+              </button>
+              <button
+                onClick={() => setWhatsappData(null)}
+                className="border border-gray-300 text-gray-500 text-xs px-3 py-1.5 rounded-lg hover:bg-gray-50 transition-all"
+              >
+                Skip
+              </button>
             </div>
           </div>
         )}
