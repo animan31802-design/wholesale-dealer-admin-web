@@ -928,11 +928,11 @@ export async function buildInvoicePDF(
 
   try {
     const canvas = await html2canvas(container, {
-      scale: 2,                 // 2× = sharp text in PDF
+      scale: 2,
       useCORS: true,
       backgroundColor: "#ffffff",
       logging: false,
-    });
+    } as any);
 
     const imgData = canvas.toDataURL("image/png");
     const pdf     = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
