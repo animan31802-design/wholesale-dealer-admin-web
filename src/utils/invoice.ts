@@ -1,17 +1,25 @@
 import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
 import { doc, getDoc, runTransaction, collection, getDocs } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Order, Customer, InvoiceType, BillingMode, OrderItem, Product } from "../types";
 import { BusinessSettings } from "../pages/Settings";
 
-// Enriches order items with hsn, gst, taxInclusive from the products collection.
-// Needed because the mobile app may not save these fields on order creation.
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface InvoiceOptions {
+  invoiceType: InvoiceType;
+  billingMode: BillingMode;
+  customerDue?: number;
+}
+
+// ─── Firestore helpers ────────────────────────────────────────────────────────
+
 async function enrichItemsFromProducts(items: OrderItem[]): Promise<OrderItem[]> {
   try {
     const snap = await getDocs(collection(db, "products"));
     const productMap = new Map<string, Product>();
     snap.docs.forEach((d) => productMap.set(d.id, { id: d.id, ...d.data() } as Product));
-
     return items.map((item) => {
       const product = productMap.get(item.productId);
       if (!product) return item;
@@ -27,12 +35,6 @@ async function enrichItemsFromProducts(items: OrderItem[]): Promise<OrderItem[]>
   }
 }
 
-export interface InvoiceOptions {
-  invoiceType: InvoiceType;
-  billingMode: BillingMode;
-  customerDue?: number;   // ONLY true historical due (before this order) — pass 0 if unknown
-}
-
 async function fetchBusinessSettings(): Promise<BusinessSettings | null> {
   try {
     const snap = await getDoc(doc(db, "settings", "business"));
@@ -43,7 +45,7 @@ async function fetchBusinessSettings(): Promise<BusinessSettings | null> {
 }
 
 async function getNextInvoiceNumber(prefix: string): Promise<string> {
-  const year = new Date().getFullYear();
+  const year = new Date().getFullYear().toString().slice(-2);
   const counterRef = doc(db, "settings", "invoiceCounter");
   let serial = 1;
   try {
@@ -54,362 +56,911 @@ async function getNextInvoiceNumber(prefix: string): Promise<string> {
       t.set(counterRef, { lastSerial: serial }, { merge: true });
     });
   } catch {
-    serial = Date.now();
+    serial = 1;
   }
-  return `${prefix}-${year}-${String(serial).padStart(3, "0")}`;
+  return `${prefix}/${year}/${String(serial).padStart(5, "0")}`;
 }
+
+// ─── Math helpers ─────────────────────────────────────────────────────────────
+
+function round2(n: number): number { return Math.round(n * 100) / 100; }
+function round3(n: number): number { return Math.round(n * 1000) / 1000; }
+
+function truncate(text: string, maxChars: number): string {
+  if (!text) return "";
+  return text.length <= maxChars ? text : text.slice(0, maxChars - 1) + "…";
+}
+
+function numberToWords(amount: number): string {
+  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven",
+    "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen",
+    "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty",
+    "Sixty", "Seventy", "Eighty", "Ninety"];
+  const n = Math.round(amount);
+  if (n === 0) return "Zero Rupees";
+  const inWords = (num: number): string => {
+    if (num < 20)       return ones[num];
+    if (num < 100)      return tens[Math.floor(num / 10)] + (num % 10 ? " " + ones[num % 10] : "");
+    if (num < 1000)     return ones[Math.floor(num / 100)] + " Hundred" + (num % 100 ? " " + inWords(num % 100) : "");
+    if (num < 100000)   return inWords(Math.floor(num / 1000)) + " Thousand" + (num % 1000 ? " " + inWords(num % 1000) : "");
+    if (num < 10000000) return inWords(Math.floor(num / 100000)) + " Lakh" + (num % 100000 ? " " + inWords(num % 100000) : "");
+    return inWords(Math.floor(num / 10000000)) + " Crore" + (num % 10000000 ? " " + inWords(num % 10000000) : "");
+  };
+  return "Rupees " + inWords(n);
+}
+
+function computeLineAmounts(item: OrderItem, isGST: boolean) {
+  const gstPct      = parseFloat(item.gst ?? "0") || 0;
+  const cgstRate    = gstPct / 2;
+  const isInclusive = item.taxInclusive === true;
+
+  if (isGST && gstPct > 0) {
+    const rawTotal     = isInclusive ? round3(item.price * item.quantity) : 0;
+    const taxableValue = isInclusive
+      ? round3(rawTotal / (1 + gstPct / 100))
+      : round3(item.price * item.quantity);
+    const lineCGST = round3(taxableValue * cgstRate / 100);
+    const lineSGST = lineCGST;
+    const lineTotal = round2(taxableValue + lineCGST + lineSGST);
+    return { taxableValue, lineCGST, lineSGST, lineTotal, gstPct };
+  }
+
+  const taxableValue = round3(item.price * item.quantity);
+  return { taxableValue, lineCGST: 0, lineSGST: 0, lineTotal: taxableValue, gstPct: 0 };
+}
+
+// ─── HTML invoice builder ─────────────────────────────────────────────────────
+
+function buildInvoiceHTML(params: {
+  order: Order;
+  customer?: Partial<Customer>;
+  biz: BusinessSettings | null;
+  invoiceNumber: string;
+  isGST: boolean;
+  showDue: boolean;
+  historicalDue: number;
+  advancePaid: number;
+}): string {
+  const { order, customer, biz, invoiceNumber, isGST, showDue, historicalDue, advancePaid } = params;
+
+  const lineAmounts   = order.items.map((item) => computeLineAmounts(item, isGST));
+  const totalTaxable  = round3(lineAmounts.reduce((s, a) => s + a.taxableValue, 0));
+  const totalCGST     = round3(lineAmounts.reduce((s, a) => s + a.lineCGST,    0));
+  const totalSGST     = round3(lineAmounts.reduce((s, a) => s + a.lineSGST,    0));
+  const computedTotal = round2(lineAmounts.reduce((s, a) => s + a.lineTotal,   0));
+  const totalPayable  = computedTotal + (showDue ? historicalDue : 0);
+  const balanceOnDelivery = Math.max(0, round2(totalPayable - advancePaid));
+
+  const addrParts = [biz?.address, biz?.city, biz?.state, biz?.pincode].filter(Boolean).join(", ");
+  const dateStr   = new Date(order.createdAt).toLocaleDateString("en-IN", {
+    day: "2-digit", month: "2-digit", year: "numeric",
+  });
+  const amountForWords = showDue && historicalDue > 0
+    ? computedTotal + historicalDue
+    : computedTotal;
+
+  // GST: 11 cols (1+2+1+1+1+1+1+1+1+1), Bill: 8 cols (1+3+1+1+1+1)
+  const colspan = isGST ? 12 : 6;
+
+  // ── shared cell base style (inline so html2canvas picks it up) ──
+  const B  = "border:1px solid #000;";
+  const BV = "border-left:1px solid #000;border-right:1px solid #000;";
+  const P  = "padding:6px 7px;";
+  const F  = "font-size:11px;";
+  const V  = "vertical-align:middle;";
+
+  const c  = `${B}${P}${F}${V}`;
+  const cv = `${BV}${P}${F}${V}`;
+
+  // ── GST item rows ──
+  const gstItemRows = order.items.map((item, i) => {
+    const { taxableValue, lineCGST, lineSGST, lineTotal, gstPct } = lineAmounts[i];
+    const cgstRate = gstPct / 2;
+    return `<tr>
+      <td style="${cv}text-align:center">${i + 1}</td>
+      <td style="${cv}">${item.productName}</td>
+      <td style="${cv}text-align:center">${item.hsn || ""}</td>
+      <td style="${cv}text-align:center">${item.quantity}</td>
+      <td style="${cv}text-align:center">${item.unit}</td>
+      <td style="${cv}text-align:right">${taxableValue.toFixed(3)}</td>
+      <td style="${cv}text-align:center">${gstPct > 0 ? `${cgstRate}%` : ""}</td>
+      <td style="${cv}text-align:right">${gstPct > 0 ? lineCGST.toFixed(3) : ""}</td>
+      <td style="${cv}text-align:center">${gstPct > 0 ? `${cgstRate}%` : ""}</td>
+      <td style="${cv}text-align:right">${gstPct > 0 ? lineSGST.toFixed(3) : ""}</td>
+      <td style="${cv}text-align:right;font-weight:600">${lineTotal.toFixed(2)}</td>
+    </tr>`;
+  }).join("");
+
+  // ── Bill-of-supply item rows ──
+  const billItemRows = order.items.map((item, i) => {
+    const { lineTotal } = lineAmounts[i];
+    return `<tr>
+      <td style="${cv}text-align:center">${i + 1}</td>
+      <td style="${cv}">${item.productName}</td>
+      <td style="${cv}text-align:center">${item.quantity}</td>
+      <td style="${cv}text-align:center">${item.unit}</td>
+      <td style="${cv}text-align:right">${item.price.toFixed(2)}</td>
+      <td style="${cv}text-align:right;font-weight:600">${lineTotal.toFixed(2)}</td>
+    </tr>`;
+  }).join("");
+
+  // ── GST totals row ──
+  const gstTotalsRow = isGST ? `
+    <tr style="font-weight:700;background:#f5f5f5">
+      <td style="${c}"></td>
+      <td style="${c}">TOTALS</td>
+      <td style="${c}"></td><td style="${c}"></td><td style="${c}"></td>
+      <td style="${c}text-align:right">${totalTaxable.toFixed(3)}</td>
+      <td style="${c}"></td>
+      <td style="${c}text-align:right">${totalCGST.toFixed(3)}</td>
+      <td style="${c}"></td>
+      <td style="${c}text-align:right">${totalSGST.toFixed(3)}</td>
+      <td style="${c}text-align:right">${computedTotal.toFixed(2)}</td>
+    </tr>` : "";
+
+  // Summary rows: last physical column is always colspan=1 (the value column)
+  const VALUE_COL_SPAN = 1;
+  const LABEL_COL_SPAN = colspan - VALUE_COL_SPAN;
+  const sigLeft  = Math.floor(colspan / 2);
+  const sigRight = colspan - sigLeft;
+
+  // ── summary row helper ──
+  const summaryRow = (label: string, value: string, bold = false) => {
+    const s = bold ? "font-weight:700;" : "";
+    return `<tr>
+      <td colspan="${LABEL_COL_SPAN}" style="${c}text-align:right;${s}">${label}</td>
+      <td colspan="${VALUE_COL_SPAN}" style="${c}text-align:right;${s}">${value}</td>
+    </tr>`;
+  };
+
+  const dueRows = showDue && historicalDue > 0 ? `
+    ${summaryRow("Previous Due", historicalDue.toFixed(2))}
+    ${summaryRow("Grand Total Payable", (computedTotal + historicalDue).toFixed(2), true)}
+  ` : "";
+
+  const advanceRow = advancePaid > 0
+    ? summaryRow("Advance Paid", advancePaid.toFixed(2))
+    : "";
+
+  const balanceRow = advancePaid > 0 && balanceOnDelivery > 0
+    ? summaryRow("Balance Due", balanceOnDelivery.toFixed(2), true)
+    : "";
+
+  const bankDetails = isGST && (biz?.bankName || biz?.upiId) ? `
+    <tr>
+      <td colspan="${colspan}" style="${c}font-size:10px">
+        <strong>Payment Details:</strong>&nbsp;
+        ${[
+          biz?.bankName      ? `Bank: ${biz.bankName}` : "",
+          biz?.accountNumber ? `A/C: ${biz.accountNumber}` : "",
+          biz?.ifscCode      ? `IFSC: ${biz.ifscCode}` : "",
+          biz?.upiId         ? `UPI: ${biz.upiId}` : "",
+        ].filter(Boolean).join("  |  ")}
+      </td>
+    </tr>` : "";
+
+  // One single table for the entire invoice — no gaps between sections
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+
+<style>
+  @font-face {
+    font-family: 'NotoTamil';
+    src: url('/fonts/NotoSansTamil-Regular.ttf') format('truetype');
+    font-weight: normal;
+  }
+
+  @font-face {
+    font-family: 'NotoTamil';
+    src: url('/fonts/NotoSansTamil-Bold.ttf') format('truetype');
+    font-weight: bold;
+  }
+
+  *{
+    box-sizing:border-box;
+    margin:0;
+    padding:0;
+  }
+
+  body{
+    font-family:'NotoTamil',Arial,sans-serif;
+    background:#fff;
+    color:#000;
+    width:794px;
+    padding:18px;
+  }
+
+  .invoice-wrapper{
+    width:740px;
+    margin:30px auto 0 auto;
+  }
+
+  table{
+    width:100%;
+    border-collapse:collapse;
+    table-layout:fixed;
+  }
+
+  td,th{
+    vertical-align:middle !important;
+  }
+
+  .title{
+    font-size:15px;
+    font-weight:700;
+    text-align:center;
+    padding:12px 0;
+    height: 50px
+  }
+
+  .header-row td{
+    height:95px;
+  }
+
+  .center{
+    text-align:center;
+  }
+
+  .right{
+    text-align:right;
+  }
+
+  .bold{
+    font-weight:700;
+  }
+
+  .small{
+    font-size:10px;
+  }
+
+  .big{
+    font-size:18px;
+    font-weight:700;
+  }
+
+  .item-head{
+    background:#f2f2f2;
+    font-weight:700;
+    text-align:center;
+  }
+
+  .item-row td{
+    border-left:1px solid #000;
+    border-right:1px solid #000;
+    border-top:none;
+    border-bottom:none;
+    padding:8px 6px;
+    font-size:11px;
+    vertical-align:middle;
+  }
+
+  .item-last td{
+    border-bottom:1px solid #000 !important;
+  }
+
+  .summary td{
+    padding:5px 8px;
+    font-size:11px;
+  }
+
+  .signature td{
+    height:80px;
+    vertical-align:bottom !important;
+    padding-bottom:10px;
+    font-size:11px;
+    font-weight:700;
+    text-align:center;
+  }
+
+</style>
+</head>
+
+<body>
+
+<div class="invoice-wrapper">
+
+<table>
+  ${isGST ? `
+  <colgroup>
+    <col style="width:4%">
+    <col style="width:12%">
+    <col style="width:12%">
+    <col style="width:8%">
+    <col style="width:6%">
+    <col style="width:6%">
+    <col style="width:12%">
+    <col style="width:7%">
+    <col style="width:8%">
+    <col style="width:7%">
+    <col style="width:8%">
+    <col style="width:12%">
+  </colgroup>
+  ` : `
+  <colgroup>
+    <col style="width:6%">   <!-- SL -->
+    <col style="width:15%">  <!-- UNIT PRICE -->
+    <col style="width:40%">  <!-- DESCRIPTION -->
+    <col style="width:12%">  <!-- QTY -->
+    <col style="width:12%">  <!-- UOM -->
+    <col style="width:15%">  <!-- TOTAL -->
+  </colgroup>
+  `}
+
+  <!-- TITLE -->
+
+  <tr>
+    <td colspan="${colspan}" style="${c}" class="title">
+      ${isGST ? "TAX INVOICE" : "BILL OF SUPPLY"}
+    </td>
+  </tr>
+
+  <!-- HEADER -->
+
+  <tr class="header-row">
+
+    ${
+    isGST
+      ? `
+      <td colspan="3" style="${c};text-align:left;padding-left:14px;">
+        ${biz?.gstin ? `<div class="small"><b>GSTIN:</b> ${biz.gstin}</div>` : ""}
+        ${biz?.phone ? `<div class="small" style="margin-top:8px;"><b>MOBILE:</b> ${biz.phone}</div>` : ""}
+        ${biz?.email ? `<div class="small" style="margin-top:8px;"><b>EMAIL:</b> ${biz.email}</div>` : ""}
+      </td>
+
+      <td colspan="6" style="${c}" class="center">
+        <div class="big">${biz?.businessName || "PTM MILL"}</div>
+
+        <div style="margin-top:8px;font-size:10px;">
+          ${addrParts}
+        </div>
+      </td>
+
+      <td colspan="3" style="${c};text-align:left;padding-left:14px;">
+        <div class="small"><b>S NO:</b> ${invoiceNumber}</div>
+
+        <div class="small" style="margin-top:8px;">
+          <b>DATE:</b> ${dateStr}
+        </div>
+
+        <div class="small" style="margin-top:8px;">
+          <b>VEHICLE NO:</b> ${order.vehicleNumber || ""}
+        </div>
+      </td>
+    `
+      : `
+      <td colspan="2" style="${c};text-align:left;padding-left:14px;">
+        ${biz?.phone ? `<div class="small" style="margin-top:8px;"><b>MOBILE:</b> ${biz.phone}</div>` : ""}
+        ${biz?.email ? `<div class="small" style="margin-top:8px;"><b>EMAIL:</b> ${biz.email}</div>` : ""}
+      </td>
+
+      <td colspan="2" style="${c}" class="center">
+        <div class="big">${biz?.businessName || "PTM MILL"}</div>
+
+        <div style="margin-top:8px;font-size:10px;">
+          ${addrParts}
+        </div>
+      </td>
+
+      <td colspan="2" style="${c};text-align:left;padding-left:14px;">
+        <div class="small"><b>S NO:</b> ${invoiceNumber}</div>
+
+        <div class="small" style="margin-top:8px;">
+          <b>DATE:</b> ${dateStr}
+        </div>
+
+        <div class="small" style="margin-top:8px;">
+          <b>VEHICLE NO:</b> ${order.vehicleNumber || ""}
+        </div>
+      </td> 
+      `
+    }
+
+
+  </tr>
+
+  <!-- CONSIGNEE -->
+
+  <tr>
+${
+isGST
+? `
+    <td colspan="3" style="${c};text-align:left;padding:10px 12px;">
+
+      <div class="small bold">CONSIGNOR</div>
+
+      <div style="margin-top:18px;font-size:14px;font-weight:700;">
+        ${biz?.businessName || ""}
+      </div>
+
+      <div style="margin-top:6px;">
+        ${biz?.city || ""}
+      </div>
+
+    </td>
+
+    <td colspan="6" style="${c};text-align:left;padding:10px 12px;">
+
+      <div class="small bold">CONSIGNEE</div>
+
+      <div style="margin-top:12px;font-size:16px;font-weight:700;">
+        ${order.customerName}
+      </div>
+
+      <div style="margin-top:5px;">
+        ${order.customerAddress || ""}
+      </div>
+
+      ${
+        order.customerPhone
+          ? `<div style="margin-top:5px;">Ph: ${order.customerPhone}</div>`
+          : ""
+      }
+
+      ${
+        customer?.gstin
+          ? `<div style="margin-top:5px;">GSTIN: ${customer.gstin}</div>`
+          : ""
+      }
+
+    </td>
+
+    <!-- QR -->
+
+    <td colspan="3" style="${c};padding:0;">
+
+      <div style="
+        width:100%;
+        height:100%;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+      ">
+
+        <div style="
+          width:70px;
+          height:70px;
+          background:#f2f2f2;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          color:#888;
+          font-size:11px;
+        ">
+          QR
+        </div>
+
+      </div>
+
+    </td>
+
+    `
+: `
+<td colspan="2" style="${c};text-align:left;padding:10px 12px;">
+
+      <div class="small bold">CONSIGNOR</div>
+
+      <div style="margin-top:18px;font-size:14px;font-weight:700;">
+        ${biz?.businessName || ""}
+      </div>
+
+      <div style="margin-top:6px;">
+        ${biz?.city || ""}
+      </div>
+
+    </td>
+
+    <td colspan="2" style="${c};text-align:left;padding:10px 12px;">
+
+      <div class="small bold">CONSIGNEE</div>
+
+      <div style="margin-top:12px;font-size:16px;font-weight:700;">
+        ${order.customerName}
+      </div>
+
+      <div style="margin-top:5px;">
+        ${order.customerAddress || ""}
+      </div>
+
+      ${
+        order.customerPhone
+          ? `<div style="margin-top:5px;">Ph: ${order.customerPhone}</div>`
+          : ""
+      }
+
+    </td>
+
+    <!-- QR -->
+
+    <td colspan="2" style="${c};padding:0;">
+
+      <div style="
+        width:100%;
+        height:100%;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+      ">
+
+        <div style="
+          width:70px;
+          height:70px;
+          background:#f2f2f2;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          color:#888;
+          font-size:11px;
+        ">
+          QR
+        </div>
+
+      </div>
+
+    </td>
+    `
+}
+
+  </tr>
+
+  <!-- TABLE HEADER -->
+
+  ${isGST ? `
+  <tr class="item-head">
+    <td style="${c}">SL</td>
+    <td colspan="2" style="${c}">DESCRIPTION</td>
+    <td style="${c}">HSN</td>
+    <td style="${c}">QTY</td>
+    <td style="${c}">UOM</td>
+    <td style="${c}">TAXABLE VALUE</td>
+    <td style="${c}">CGST%</td>
+    <td style="${c}">CGST</td>
+    <td style="${c}">SGST%</td>
+    <td style="${c}">SGST</td>
+    <td style="${c}">TOTAL Rs.</td>
+  </tr>
+  ` : `
+  <tr class="item-head">
+    <td style="${c}">SL</td>
+    <td style="${c}">UNIT PRICE</td>
+    <td style="${c}">DESCRIPTION</td>
+    <td style="${c}">QTY</td>
+    <td style="${c}">UOM</td>
+    <td style="${c}">TOTAL Rs.</td>
+  </tr>
+  `}
+
+  <!-- ITEMS -->
+
+  ${isGST ? order.items.map((item, i) => {
+
+    const {
+      taxableValue,
+      lineCGST,
+      lineSGST,
+      lineTotal,
+      gstPct
+    } = lineAmounts[i];
+
+    const cgstRate = gstPct / 2;
+
+    return `
+    <tr class="item-row">
+
+      <td>${i + 1}</td>
+
+      <td colspan="2" style="text-align:left;padding-left:10px;">
+        ${item.productName}
+      </td>
+
+      <td>${item.hsn || ""}</td>
+
+      <td>${item.quantity}</td>
+
+      <td>${item.unit}</td>
+
+      <td class="right">
+        ${taxableValue.toFixed(3)}
+      </td>
+
+      <td>
+        ${gstPct > 0 ? `${cgstRate}%` : ""}
+      </td>
+
+      <td class="right">
+        ${gstPct > 0 ? lineCGST.toFixed(3) : ""}
+      </td>
+
+      <td>
+        ${gstPct > 0 ? `${cgstRate}%` : ""}
+      </td>
+
+      <td class="right">
+        ${gstPct > 0 ? lineSGST.toFixed(3) : ""}
+      </td>
+
+      <td class="right bold">
+        ${lineTotal.toFixed(2)}
+      </td>
+
+    </tr>
+    `;
+  }).join("") : order.items.map((item, i) => {
+
+    const { lineTotal } = lineAmounts[i];
+
+    return `
+    <tr class="item-row">
+
+      <td>${i + 1}</td>
+
+      <td class="right">
+        ${item.price.toFixed(2)}
+      </td>
+
+      <td style="text-align:left;padding-left:10px;">
+        ${item.productName}
+      </td>
+
+      <td>${item.quantity}</td>
+
+      <td>${item.unit}</td>
+
+      <td class="right bold">
+        ${lineTotal.toFixed(2)}
+      </td>
+
+    </tr>
+    `;
+  }).join("")}
+
+  <!-- EMPTY ROWS -->
+
+  ${isGST ? `
+  <tr class="item-row">
+    <td>&nbsp;</td>
+    <td colspan="2"></td>
+    <td></td><td></td><td></td>
+    <td></td><td></td><td></td>
+    <td></td><td></td><td></td>
+  </tr>
+
+  <tr class="item-row item-last">
+    <td>&nbsp;</td>
+    <td colspan="2"></td>
+    <td></td><td></td><td></td>
+    <td></td><td></td><td></td>
+    <td></td><td></td><td></td>
+  </tr>
+  ` : `
+  <tr class="item-row">
+    <td>&nbsp;</td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+  </tr>
+
+  <tr class="item-row item-last">
+    <td>&nbsp;</td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+  </tr>
+  `}
+
+  <!-- TOTALS -->
+
+  ${isGST ? `
+
+  <tr>
+
+    <td style="${c}"></td>
+
+    <td colspan="2" style="${c};font-weight:700;">
+      TOTALS
+    </td>
+
+    <td style="${c}"></td>
+    <td style="${c}"></td>
+    <td style="${c}"></td>
+
+    <td style="${c};text-align:right;font-weight:700;">
+      ${totalTaxable.toFixed(3)}
+    </td>
+
+    <td style="${c}"></td>
+
+    <td style="${c};text-align:right;font-weight:700;">
+      ${totalCGST.toFixed(3)}
+    </td>
+
+    <td style="${c}"></td>
+
+    <td style="${c};text-align:right;font-weight:700;">
+      ${totalSGST.toFixed(3)}
+    </td>
+
+    <td style="${c};text-align:right;font-weight:700;">
+      ${computedTotal.toFixed(2)}
+    </td>
+
+  </tr>
+
+  ` : `
+
+  <tr>
+
+    <td style="${c}"></td>
+
+    <td colspan="4" style="${c};font-weight:700;">
+      TOTALS
+    </td>
+
+    <td style="${c};text-align:right;font-weight:700;">
+      ${computedTotal.toFixed(2)}
+    </td>
+
+  </tr>
+
+  `}
+
+  <!-- GRAND TOTAL -->
+
+  ${summaryRow("GRAND TOTAL", computedTotal.toFixed(2), true)}
+
+  ${dueRows}
+
+  ${advanceRow}
+
+  ${balanceRow}
+
+  <!-- CASH -->
+
+  <tr>
+    <td colspan="${colspan - 1}"
+      style="${c};text-align:right;font-weight:700;">
+      CASH COLLECTION
+    </td>
+
+    <td style="${c}"></td>
+  </tr>
+
+  <!-- WORDS -->
+
+  <tr>
+    <td colspan="${colspan}"
+      style="${c};text-align:center;">
+      ${numberToWords(amountForWords)} Only
+    </td>
+  </tr>
+
+  <!-- SIGN -->
+
+  <tr class="signature">
+
+    <td colspan="${Math.floor(colspan / 2)}"
+      style="${c}">
+      Proprietor Signature
+    </td>
+
+    <td colspan="${colspan - Math.floor(colspan / 2)}"
+      style="${c}">
+      Receiver Signature
+    </td>
+
+  </tr>
+
+  <!-- FOOTER -->
+
+  <tr>
+
+    <td colspan="${colspan}"
+      style="${c};text-align:center;">
+
+      <div>
+        ${(biz as any)?.invoiceFooterLine1 || "This Is Computer Based Invoice"}
+      </div>
+
+      <div style="margin-top:4px;">
+        ${biz?.invoiceFooter || "Thank you! Visit Again"}
+      </div>
+
+    </td>
+
+  </tr>
+
+</table>
+
+</div>
+
+</body>
+</html>`;
+}
+
+// ─── Core: HTML → canvas → PDF ───────────────────────────────────────────────
 
 export async function buildInvoicePDF(
   order: Order,
   customer?: Partial<Customer>,
   options?: Partial<InvoiceOptions>
 ) {
-  // Enrich items with hsn, gst, taxInclusive from products
-  const enrichedItems = await enrichItemsFromProducts(order.items);
+  const [enrichedItems, biz] = await Promise.all([
+    enrichItemsFromProducts(order.items),
+    fetchBusinessSettings(),
+  ]);
   const enrichedOrder = { ...order, items: enrichedItems };
 
-  const biz = await fetchBusinessSettings();
-  const invoiceType: InvoiceType =
-    options?.invoiceType ?? biz?.defaultInvoiceType ?? "estimate";
-  const billingMode: BillingMode =
-    options?.billingMode ?? biz?.defaultBillingMode ?? "without_due";
-  const isGST    = invoiceType === "gst";
-  const showDue  = billingMode === "with_due";
-  const prefix   = biz?.invoicePrefix || "INV";
+  const invoiceType: InvoiceType = options?.invoiceType ?? biz?.defaultInvoiceType ?? "estimate";
+  const billingMode: BillingMode = options?.billingMode ?? biz?.defaultBillingMode ?? "without_due";
+  const isGST   = invoiceType === "gst";
+  const showDue = billingMode === "with_due";
+  const prefix  = biz?.invoicePrefix || "INV";
 
-  // ── Payment figures ────────────────────────────────────────────────────────
-  // Rule: NEVER use customer.outstandingDue for the invoice.
-  // outstandingDue is updated when the order is placed and already includes the
-  // balance of this order — so using it here would double-count.
-  //
-  // Instead we use the order's own saved fields:
-  //   order.advancePaid  — collected at order creation (may be 0)
-  //   order.balanceDue   — remaining to collect on delivery = orderTotal − advancePaid
-  //
-  // The InvoiceModal's "Previous Due" field (options.customerDue) is for HISTORICAL
-  // outstanding BEFORE this order.  The caller must pass the pre-order outstanding,
-  // not the current customer.outstandingDue.
-
-  // Historical due from BEFORE this order (passed in by InvoiceModal, default 0)
   const historicalDue: number = (() => {
     if (options?.customerDue !== undefined) return options.customerDue;
-    // If caller didn't pass it, try to derive it:
-    // pre-order due = current outstandingDue − balanceDue
-    const currentDue    = (customer as any)?.outstandingDue ?? 0;
-    const orderBalance  = (order as any).balanceDue ?? 0;
-    const derived       = currentDue - orderBalance;
-    return Math.max(0, Math.round(derived * 100) / 100);
+    const currentDue   = (customer as any)?.outstandingDue ?? 0;
+    const orderBalance = (order as any).balanceDue ?? 0;
+    return Math.max(0, round2(currentDue - orderBalance));
   })();
 
-  // Advance paid at order creation
   const advancePaid: number = (order as any).advancePaid ?? order.amountCollected ?? 0;
+  const invoiceNumber       = order.invoiceNumber || (await getNextInvoiceNumber(prefix));
 
-  const invoiceNumber =
-    order.invoiceNumber || (await getNextInvoiceNumber(prefix));
-
-  const pdf = new jsPDF({ unit: "mm", format: "a4" });
-  const W = 210;
-  const M = 14;
-
-  // ── Header band ─────────────────────────────────────────────────────────
-  pdf.setFillColor(234, 88, 12);
-  pdf.rect(0, 0, W, 30, "F");
-
-  pdf.setFontSize(17);
-  pdf.setTextColor(255, 255, 255);
-  pdf.setFont("helvetica", "bold");
-  pdf.text(biz?.businessName || "WHOLESALE DEALER", M, 11);
-
-  pdf.setFontSize(8);
-  pdf.setFont("helvetica", "normal");
-  const addressLine = [biz?.address, biz?.city, biz?.state, biz?.pincode]
-    .filter(Boolean)
-    .join(", ");
-  if (addressLine) pdf.text(addressLine, M, 17);
-  const contactLine = [
-    biz?.phone ? `Ph: ${biz.phone}` : null,
-    biz?.email || null,
-  ]
-    .filter(Boolean)
-    .join("  |  ");
-  if (contactLine) pdf.text(contactLine, M, 22);
-  if (isGST) {
-    if (biz?.gstin) {
-      pdf.setFont("helvetica", "bold");
-      pdf.text(`GSTIN: ${biz.gstin}`, M, 27);
-      pdf.setFont("helvetica", "normal");
-    } else {
-      pdf.setTextColor(200, 80, 80);
-      pdf.setFont("helvetica", "italic");
-      pdf.text("GSTIN: Not set — add in Settings", M, 27);
-      pdf.setFont("helvetica", "normal");
-      pdf.setTextColor(255, 255, 255);
-    }
-  }
-
-  pdf.setFontSize(11);
-  pdf.setFont("helvetica", "bold");
-  pdf.text(isGST ? "TAX INVOICE" : "ESTIMATE", W - M, 11, { align: "right" });
-  pdf.setFontSize(8);
-  pdf.setFont("helvetica", "normal");
-  pdf.text(invoiceNumber, W - M, 17, { align: "right" });
-  pdf.text(
-    new Date(order.createdAt).toLocaleDateString("en-IN", {
-      day: "2-digit", month: "short", year: "numeric",
-    }),
-    W - M,
-    22,
-    { align: "right" }
-  );
-
-  // ── Bill to box ──────────────────────────────────────────────────────────
-  let y = 38;
-  pdf.setFillColor(249, 249, 249);
-  pdf.roundedRect(M, y, 90, isGST ? 36 : 30, 2, 2, "F");
-  pdf.setFontSize(8);
-  pdf.setTextColor(150);
-  pdf.setFont("helvetica", "bold");
-  pdf.text("BILL TO", M + 3, y + 6);
-  pdf.setFontSize(10);
-  pdf.setTextColor(20);
-  pdf.setFont("helvetica", "bold");
-  pdf.text(order.customerName, M + 3, y + 13);
-  pdf.setFontSize(8);
-  pdf.setFont("helvetica", "normal");
-  pdf.setTextColor(70);
-  const addrLines = pdf.splitTextToSize(order.customerAddress || "", 82);
-  pdf.text(addrLines.slice(0, 2), M + 3, y + 19);
-  if (order.customerPhone) pdf.text(`Ph: ${order.customerPhone}`, M + 3, y + 27);
-  if (isGST && customer?.gstin)
-    pdf.text(`GSTIN: ${customer.gstin}`, M + 3, y + 31);
-
-  // Order meta right side
-  pdf.setFontSize(8.5);
-  pdf.setTextColor(60);
-  pdf.setFont("helvetica", "normal");
-  const metaX = 120;
-  pdf.text(`Agent: ${order.agentName}`, metaX, y + 6);
-  if (order.vehicleNumber)
-    pdf.text(`Vehicle: ${order.vehicleNumber}`, metaX, y + 12);
-
-  // ── Items table ──────────────────────────────────────────────────────────
-  y = 76;
-  const col = {
-    no:    M,
-    name:  M + 8,
-    hsn:   isGST ? 80 : 0,
-    qty:   isGST ? 105 : 128,
-    unit:  isGST ? 119 : 142,
-    rate:  isGST ? 133 : 158,
-    cgst:  isGST ? 150 : 0,
-    sgst:  isGST ? 163 : 0,
-    total: W - M,
-  };
-
-  pdf.setFillColor(234, 88, 12);
-  pdf.rect(M, y, W - M * 2, 8, "F");
-  pdf.setFontSize(8);
-  pdf.setTextColor(255);
-  pdf.setFont("helvetica", "bold");
-  pdf.text("#",        col.no + 1,  y + 5.5);
-  pdf.text("Product",  col.name,    y + 5.5);
-  if (isGST) pdf.text("HSN", col.hsn, y + 5.5);
-  pdf.text("Qty",      col.qty,     y + 5.5, { align: "right" });
-  pdf.text("Unit",     col.unit,    y + 5.5);
-  pdf.text("Rate",     col.rate,    y + 5.5, { align: "right" });
-  if (isGST) {
-    pdf.text("CGST",   col.cgst,    y + 5.5, { align: "right" });
-    pdf.text("SGST",   col.sgst,    y + 5.5, { align: "right" });
-  }
-  pdf.text("Amount",   col.total,   y + 5.5, { align: "right" });
-
-  y += 10;
-  pdf.setFont("helvetica", "normal");
-  pdf.setTextColor(30);
-
-  let subtotal = 0, totalCGST = 0, totalSGST = 0;
-
-  enrichedOrder.items.forEach((item, i) => {
-    if (i % 2 === 0) {
-      pdf.setFillColor(250, 250, 250);
-      pdf.rect(M, y - 3, W - M * 2, 8, "F");
-    }
-
-    const gstPct      = parseFloat(item.gst ?? "0") || 0;
-    const cgstRate    = gstPct / 2;
-    const isInclusive = item.taxInclusive === true;
-
-    // Taxable base per unit:
-    //   Inclusive → extract from price: price / (1 + gst/100)
-    //   Exclusive → price is already pre-tax
-    const basePerUnit = isGST && gstPct > 0 && isInclusive
-      ? item.price / (1 + gstPct / 100)
-      : item.price;
-
-    const lineBase = basePerUnit * item.quantity;
-    const lineCGST = isGST && gstPct > 0 ? (lineBase * cgstRate) / 100 : 0;
-    const lineSGST = lineCGST;
-
-    // Line total on invoice:
-    //   Exclusive → base + CGST + SGST
-    //   Inclusive → selling price × qty (tax already inside)
-    const lineTotal = isGST && gstPct > 0
-      ? (isInclusive
-          ? item.price * item.quantity
-          : lineBase + lineCGST + lineSGST)
-      : item.total;
-
-    subtotal  += lineBase;
-    totalCGST += lineCGST;
-    totalSGST += lineSGST;
-
-    pdf.setFontSize(8);
-    pdf.text(String(i + 1), col.no + 1, y + 2);
-    pdf.text(
-      pdf.splitTextToSize(item.productName, 65)[0],
-      col.name, y + 2
-    );
-    if (isGST) pdf.text(item.hsn || "—", col.hsn, y + 2);
-    pdf.text(String(item.quantity),      col.qty,   y + 2, { align: "right" });
-    pdf.text(item.unit,                  col.unit,  y + 2);
-    pdf.text(item.price.toFixed(2),      col.rate,  y + 2, { align: "right" });
-    if (isGST) {
-      pdf.text(lineCGST > 0 ? lineCGST.toFixed(2) : "-", col.cgst, y + 2, { align: "right" });
-      pdf.text(lineSGST > 0 ? lineSGST.toFixed(2) : "-", col.sgst, y + 2, { align: "right" });
-    }
-    pdf.text(lineTotal.toFixed(2), col.total, y + 2, { align: "right" });
-    y += 8;
+  const html = buildInvoiceHTML({
+    order: enrichedOrder, customer, biz, invoiceNumber,
+    isGST, showDue, historicalDue, advancePaid,
   });
 
-  // ── Totals section ───────────────────────────────────────────────────────
-  pdf.setDrawColor(220);
-  pdf.line(M, y + 2, W - M, y + 2);
-  y += 7;
+  // Mount off-screen
+  const container = document.createElement("div");
+  container.style.cssText = "position:fixed;left:-9999px;top:0;width:794px;background:#fff;z-index:-1";
+  container.innerHTML = html;
+  document.body.appendChild(container);
 
-  const tX = 130, vX = W - M;
+  // Wait for NotoTamil fonts to load before capturing
+  await document.fonts.ready;
 
-  const addRow = (
-    label: string,
-    value: string,
-    bold = false,
-    rgb?: [number, number, number]
-  ) => {
-    pdf.setFontSize(9);
-    pdf.setFont("helvetica", bold ? "bold" : "normal");
-    pdf.setTextColor(...(rgb ?? [60, 60, 60]));
-    pdf.text(label, tX, y);
-    pdf.text(value, vX, y, { align: "right" });
-    y += 6;
-  };
+  try {
+    const canvas = await html2canvas(container, {
+      scale: 2,                 // 2× = sharp text in PDF
+      useCORS: true,
+      backgroundColor: "#ffffff",
+      logging: false,
+    });
 
-  // Bill total = computed from line totals (don't trust order.totalAmount —
-  // mobile app saves base price only without adding GST on top)
-  const computedTotal = isGST
-    ? subtotal + totalCGST + totalSGST
-    : subtotal;
+    const imgData = canvas.toDataURL("image/png");
+    const pdf     = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+    const pdfW    = pdf.internal.pageSize.getWidth();
+    const pdfH    = pdf.internal.pageSize.getHeight();
 
-  if (isGST) {
-    addRow("Taxable Amount:", `Rs.${subtotal.toFixed(2)}`);
-    addRow("CGST:",           `Rs.${totalCGST.toFixed(2)}`);
-    addRow("SGST:",           `Rs.${totalSGST.toFixed(2)}`);
-    pdf.setDrawColor(200);
-    pdf.line(tX, y, vX, y);
-    y += 4;
+    const ratio      = pdfW / canvas.width;
+    const imgH       = canvas.height * ratio;
+    let   heightLeft = imgH;
+    let   position   = 0;
+
+    pdf.addImage(imgData, "PNG", 0, position, pdfW, imgH);
+    heightLeft -= pdfH;
+
+    while (heightLeft > 0) {
+      position  -= pdfH;
+      pdf.addPage();
+      pdf.addImage(imgData, "PNG", 0, position, pdfW, imgH);
+      heightLeft -= pdfH;
+    }
+
+    return pdf;
+  } finally {
+    document.body.removeChild(container);
   }
-
-  addRow("Current Bill Total:", `Rs.${computedTotal.toFixed(2)}`, true, [20, 20, 20]);
-
-  // ── Historical due from BEFORE this order (truly old outstanding) ────────
-  if (showDue && historicalDue > 0) {
-    y += 2;
-    addRow("Previous Due:", `Rs.${historicalDue.toFixed(2)}`, false, [180, 50, 20]);
-    pdf.setDrawColor(200);
-    pdf.line(tX, y, vX, y);
-    y += 4;
-    addRow(
-      "Grand Total Payable:",
-      `Rs.${(computedTotal + historicalDue).toFixed(2)}`,
-      true,
-      [180, 50, 20]
-    );
-  }
-
-  // ── Advance paid at order creation ───────────────────────────────────────
-  // Show advance only when > 0 (customer paid something upfront)
-  if (advancePaid > 0) {
-    y += 2;
-    addRow(
-      "Advance Paid:",
-      `Rs.${advancePaid.toFixed(2)}`,
-      false,
-      [20, 130, 60]
-    );
-  }
-
-  // ── Balance to collect on delivery ───────────────────────────────────────
-  // balanceDue = what delivery agent needs to collect
-  // = computedTotal + historicalDue − advancePaid
-  const totalPayable   = computedTotal + (showDue ? historicalDue : 0);
-  const balanceOnDelivery = Math.max(0, Math.round((totalPayable - advancePaid) * 100) / 100);
-
-  if (balanceOnDelivery > 0) {
-    addRow(
-      advancePaid > 0 ? "Balance Due on Delivery:" : "Amount Due on Delivery:",
-      `Rs.${balanceOnDelivery.toFixed(2)}`,
-      true,
-      [180, 50, 20]
-    );
-  } else if (advancePaid > 0 && balanceOnDelivery === 0) {
-    // Fully paid upfront
-    addRow("Status:", "FULLY PAID", true, [20, 130, 60]);
-  }
-
-  // ── Bank details (GST invoices) ──────────────────────────────────────────
-  if (isGST && (biz?.bankName || biz?.upiId)) {
-    y += 6;
-    pdf.setFontSize(8);
-    pdf.setFont("helvetica", "bold");
-    pdf.setTextColor(80);
-    pdf.text("Payment Details:", M, y);
-    y += 5;
-    pdf.setFont("helvetica", "normal");
-    if (biz?.bankName)
-      pdf.text(
-        `Bank: ${biz.bankName}  |  A/C: ${biz.accountNumber}  |  IFSC: ${biz.ifscCode}`,
-        M, y
-      ), (y += 5);
-    if (biz?.upiId)
-      pdf.text(`UPI: ${biz.upiId}`, M, y), (y += 5);
-  }
-
-  // ── Signature lines ──────────────────────────────────────────────────────
-  if (y < 248) {
-    y = Math.max(y + 8, 248);
-    pdf.setDrawColor(180);
-    pdf.line(M, y, M + 60, y);
-    pdf.line(W - M - 60, y, W - M, y);
-    pdf.setFontSize(8);
-    pdf.setTextColor(130);
-    pdf.text("Customer Signature", M, y + 5);
-    pdf.text("Authorized Signatory", W - M - 60, y + 5);
-  }
-
-  // ── Footer ───────────────────────────────────────────────────────────────
-  pdf.setFontSize(8);
-  pdf.setTextColor(160);
-  pdf.setFont("helvetica", "italic");
-  if (!isGST)
-    pdf.text("* This is an estimate only — not a tax invoice.", M, 285);
-  else
-    pdf.text("* Subject to jurisdiction of local courts.", M, 285);
-  pdf.text(
-    biz?.invoiceFooter || "Thank you for your business!",
-    W / 2, 290,
-    { align: "center" }
-  );
-
-  return pdf;
 }
+
+// ─── Public exports (same API as before — no callers need to change) ──────────
 
 export async function generateInvoicePDF(
   order: Order,
