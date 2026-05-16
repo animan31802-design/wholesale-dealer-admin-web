@@ -407,8 +407,12 @@ export default function CreateOrderPage() {
   // Firestore data
   const [customers, setCustomers]   = useState<Customer[]>([]);
   const [products, setProducts]     = useState<Product[]>([]);
+  const [regions, setRegions]       = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading]       = useState(true);
   const [frequentIds, setFrequentIds] = useState<string[]>([]);
+
+  // Customer region filter
+  const [selectedRegion, setSelectedRegion] = useState<string>("");
 
   // Billing state
   const [customer, setCustomer]     = useState<Customer | null>(null);
@@ -433,8 +437,9 @@ export default function CreateOrderPage() {
   const searchRef = useRef<HTMLInputElement>(null);
 
   // ── Tamil-aware search for customers ────────────────────────────────────
+  // regionName + area included so typing a region/area name (English or Tamil) filters the list
   const { query: customerSearch, setQuery: setCustomerSearch, results: customerSearchResults } =
-    useTamilSearch(customers as unknown as Record<string, unknown>[], ["shopName", "ownerName", "phone"]);
+    useTamilSearch(customers as unknown as Record<string, unknown>[], ["shopName", "ownerName", "phone", "regionName", "area"]);
 
   // ── Tamil-aware search for products ─────────────────────────────────────
   const { query: searchQuery, setQuery: setSearchQuery, results: productSearchResults } =
@@ -447,12 +452,21 @@ export default function CreateOrderPage() {
     const init = async () => {
       setLoading(true);
       try {
-        const [custSnap, ordersSnap] = await Promise.all([
+        const [custSnap, ordersSnap, regionSnap] = await Promise.all([
           getDocs(query(collection(db, "customers"), orderBy("shopName"))),
           getDocs(query(collection(db, "orders"), orderBy("createdAt", "desc"))),
+          getDocs(query(collection(db, "regions"), orderBy("name"))),
         ]);
 
         setCustomers(custSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Customer)));
+
+        // Deduplicate regions by name (same guard as Customers.tsx)
+        const seen = new Set<string>();
+        setRegions(
+          regionSnap.docs
+            .map((d) => ({ id: d.id, name: (d.data() as any).name as string }))
+            .filter((r) => { const k = r.name.toLowerCase().trim(); if (seen.has(k)) return false; seen.add(k); return true; })
+        );
 
         // Compute frequent product ids from last 100 orders
         const freq: Record<string, number> = {};
@@ -796,6 +810,8 @@ export default function CreateOrderPage() {
     setPaidAmount("");
     setNotes("");
     setDraftWarnings([]);
+    // selectedRegion intentionally NOT reset — agent stays on current region
+    // between orders so they can bill all shops in one area without re-selecting
   };
 
   const handleBack = () => {
@@ -863,8 +879,12 @@ export default function CreateOrderPage() {
     }
   };
 
-  // filteredCustomers now comes directly from Tamil-aware search
-  const filteredCustomers = customerSearchResults as unknown as Customer[];
+  // filteredCustomers: Tamil search results further narrowed by selected region chip
+  const filteredCustomers = useMemo(() => {
+    const searched = customerSearchResults as unknown as Customer[];
+    if (!selectedRegion) return searched;
+    return searched.filter((c) => c.regionId === selectedRegion);
+  }, [customerSearchResults, selectedRegion]);
 
   // ─── CUSTOMER SELECTION SCREEN ────────────────────────────────────
 
@@ -916,13 +936,47 @@ export default function CreateOrderPage() {
         )}
 
         {/* Customer search */}
-        <div className="mb-4">
+        <div className="mb-3">
           <TamilSearchInput
             value={customerSearch}
             onChange={setCustomerSearch}
-            placeholder="Search by shop, owner, phone, area… (supports Tamil)"
+            placeholder="Search by shop, owner, phone, region… (supports Tamil)"
           />
         </div>
+
+        {/* Region filter chips — tap a region to show only its customers */}
+        {!loading && regions.length > 0 && (
+          <div className="flex gap-2 mb-4 overflow-x-auto pb-1 -mx-1 px-1">
+            <button
+              onClick={() => setSelectedRegion("")}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium border whitespace-nowrap transition-all flex-shrink-0 ${
+                !selectedRegion
+                  ? "bg-orange-500 text-white border-orange-500"
+                  : "bg-white text-gray-500 border-gray-200 hover:border-orange-300"
+              }`}
+            >
+              All Regions
+            </button>
+            {regions.map((r) => (
+              <button
+                key={r.id}
+                onClick={() => setSelectedRegion(selectedRegion === r.id ? "" : r.id)}
+                className={`px-3 py-1.5 rounded-full text-xs font-medium border whitespace-nowrap transition-all flex-shrink-0 ${
+                  selectedRegion === r.id
+                    ? "bg-orange-500 text-white border-orange-500"
+                    : "bg-white text-gray-500 border-gray-200 hover:border-orange-300"
+                }`}
+              >
+                {r.name}
+                {selectedRegion === r.id && (
+                  <span className="ml-1 opacity-70">
+                    ({filteredCustomers.length})
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
 
         {loading ? (
           <div className="text-center py-20 text-gray-400 text-sm">Loading customers…</div>

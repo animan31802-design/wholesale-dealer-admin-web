@@ -225,10 +225,17 @@ ${skipped} rows skipped (missing shop name or phone)`);
       }
     }
 
+    // Strip undefined lat/lng/locationAddress — Firestore rejects undefined values.
+    // Only include location fields when the user has actually picked a map point.
+    const cleanForm = { ...form, gstin: form.gstin?.trim().toUpperCase() || "" };
+    if (cleanForm.lat == null)         delete (cleanForm as any).lat;
+    if (cleanForm.lng == null)         delete (cleanForm as any).lng;
+    if (!cleanForm.locationAddress)    delete (cleanForm as any).locationAddress;
+
     if (editId) {
-      await updateDoc(doc(db, "customers", editId), { ...form, gstin: form.gstin?.trim().toUpperCase() || "" });
+      await updateDoc(doc(db, "customers", editId), cleanForm);
     } else {
-      await addDoc(collection(db, "customers"), { ...form, gstin: form.gstin?.trim().toUpperCase() || "", outstandingDue: 0, createdAt: new Date().toISOString() });
+      await addDoc(collection(db, "customers"), { ...cleanForm, outstandingDue: 0, createdAt: new Date().toISOString() });
     }
     setForm(emptyCustomer()); setEditId(null); setShowForm(false); fetchAll();
   };
@@ -411,7 +418,7 @@ ${skipped} rows skipped (missing shop name or phone)`);
             <form onSubmit={handleSubmit} className="p-6 space-y-6">
               <Sec title="Shop Information">
                 <Fld label="Shop Name *"><input value={form.shopName} onChange={(e) => setForm({ ...form, shopName: e.target.value })} required placeholder="e.g. Sri Murugan Stores" className={inp} /></Fld>
-                <Fld label="Owner Name"><input value={form.ownerName} onChange={(e) => setForm({ ...form, ownerName: e.target.value })} placeholder="e.g. Ravi Kumar" className={inp} /></Fld>
+                <Fld label="Owner Name"><input value={form.ownerName} onChange={(e) => setForm({ ...form, ownerName: e.target.value })} placeholder="e.g. Ravi Kumar (optional)" className={inp} /></Fld>
                 <div className="grid grid-cols-2 gap-4">
                   <Fld label="Phone *">
                     <input
