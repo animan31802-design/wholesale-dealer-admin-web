@@ -411,7 +411,7 @@ ${skipped} rows skipped (missing shop name or phone)`);
             <form onSubmit={handleSubmit} className="p-6 space-y-6">
               <Sec title="Shop Information">
                 <Fld label="Shop Name *"><input value={form.shopName} onChange={(e) => setForm({ ...form, shopName: e.target.value })} required placeholder="e.g. Sri Murugan Stores" className={inp} /></Fld>
-                <Fld label="Owner Name *"><input value={form.ownerName} onChange={(e) => setForm({ ...form, ownerName: e.target.value })} required placeholder="e.g. Ravi Kumar" className={inp} /></Fld>
+                <Fld label="Owner Name"><input value={form.ownerName} onChange={(e) => setForm({ ...form, ownerName: e.target.value })} placeholder="e.g. Ravi Kumar" className={inp} /></Fld>
                 <div className="grid grid-cols-2 gap-4">
                   <Fld label="Phone *">
                     <input
