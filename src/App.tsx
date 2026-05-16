@@ -1,7 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { onAuthStateChanged, signOut } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, onSnapshot } from "firebase/firestore";
 import { auth, db } from "./firebase/config";
 import { useAuthStore } from "./store/authStore";
 import { AppUser } from "./types";
@@ -58,21 +58,40 @@ function OpsRoute({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   const { setUser, setLoading, logout } = useAuthStore();
+  // Keep a ref to the live user-doc unsubscribe so we can cancel it on sign-out
+  const userDocUnsub = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      // Cancel any previous real-time listener from a prior session
+      if (userDocUnsub.current) { userDocUnsub.current(); userDocUnsub.current = null; }
+
       if (firebaseUser) {
+        // Initial load: read once to set user before subscribing
         const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
         if (userDoc.exists()) {
           const userData = userDoc.data() as AppUser;
-          // ── isActive enforcement ──────────────────────────────
-          // If an admin deactivates a user who is currently logged in,
-          // the next auth state refresh will sign them out automatically.
           if (userData.isActive === false) {
             await signOut(auth);
             logout();
           } else {
             setUser(userData);
+            // FIX (LOW): Real-time listener keeps role/isActive in sync.
+            // If an admin changes this user's role or deactivates them,
+            // the UI updates immediately without requiring re-login.
+            userDocUnsub.current = onSnapshot(
+              doc(db, "users", firebaseUser.uid),
+              (snap) => {
+                if (!snap.exists()) { logout(); return; }
+                const live = snap.data() as AppUser;
+                if (live.isActive === false) {
+                  signOut(auth).then(() => logout());
+                } else {
+                  setUser(live);
+                }
+              },
+              () => { /* permission error after deactivation — already signed out */ }
+            );
           }
         } else {
           logout();
@@ -82,7 +101,10 @@ export default function App() {
       }
       setLoading(false);
     });
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      if (userDocUnsub.current) userDocUnsub.current();
+    };
   }, []);
 
   return (

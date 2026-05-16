@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import {
-  collection, onSnapshot, doc, updateDoc, query, where
+  collection, onSnapshot, doc, runTransaction, query, where
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Order } from "../types";
@@ -62,14 +62,21 @@ export default function PackingStation() {
   const markPacked = async (order: Order) => {
     setConfirmingId(order.id!);
     try {
-      await updateDoc(doc(db, "orders", order.id!), {
-        status: "packed",
-        packedAt: new Date().toISOString(),
-        packedBy: user?.uid,
-        packedByName: user?.name,
+      // Use a transaction so we verify status is still "pending" before writing —
+      // prevents double-packing if two staff tap simultaneously.
+      await runTransaction(db, async (t) => {
+        const snap = await t.get(doc(db, "orders", order.id!));
+        if (!snap.exists()) throw new Error("Order not found.");
+        if (snap.data().status !== "pending") throw new Error("Order is no longer pending.");
+        t.update(doc(db, "orders", order.id!), {
+          status: "packed",
+          packedAt: new Date().toISOString(),
+          packedBy: user?.uid,
+          packedByName: user?.name,
+        });
       });
-    } catch (err) {
-      console.error("Failed to mark packed:", err);
+    } catch (err: any) {
+      alert(err.message || "Failed to mark as packed. Please refresh and try again.");
     } finally {
       setConfirmingId(null);
     }

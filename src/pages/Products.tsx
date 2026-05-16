@@ -102,6 +102,21 @@ export default function Products() {
   // ── CRUD ──────────────────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // ── Input validation: prevent negative/NaN values corrupting stock maths ──
+    if (!isFinite(form.sellingPrice) || form.sellingPrice < 0) {
+      alert("Selling price must be a valid non-negative number."); return;
+    }
+    if (!isFinite(form.costPrice) || form.costPrice < 0) {
+      alert("Cost price must be a valid non-negative number."); return;
+    }
+    if (form.trackInventory && (!isFinite(form.stock) || form.stock < 0)) {
+      alert("Stock must be a valid non-negative number."); return;
+    }
+    if (!isFinite(form.minStockAlert) || form.minStockAlert < 0) {
+      alert("Min stock alert must be a valid non-negative number."); return;
+    }
+
     const now = new Date().toISOString();
     const data = { ...form, updatedAt: now };
     if (!data.createdAt) data.createdAt = now;

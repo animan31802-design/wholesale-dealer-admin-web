@@ -7,16 +7,19 @@ import { useAuthStore } from "../store/authStore";
 import { AppUser } from "../types";
 
 // ── Brute-force constants ─────────────────────────────────────────
-// NOTE: These are client-side guards only (UX layer). For production,
-// enable Firebase App Check + reCAPTCHA Enterprise in the Firebase console
-// for true server-side brute-force protection.
+// SECURITY NOTE: This is a client-side UX guard only.
+// It survives page refresh and NEW TABS via localStorage (same origin).
+// For true server-side protection enable Firebase App Check +
+// reCAPTCHA Enterprise in the Firebase console — direct REST API
+// calls will bypass any client-side lock regardless.
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS   = 60_000; // 60 seconds
 
-// ── Persist lockout in sessionStorage so page-refresh doesn't reset it ──
+// ── Persist lockout in localStorage so new tabs also see the lockout ──
+// (sessionStorage is per-tab — switching tabs bypasses a sessionStorage lock)
 function getLockState(): { attempts: number; lockedUntil: number } {
   try {
-    const raw = sessionStorage.getItem("_login_lock");
+    const raw = localStorage.getItem("_login_lock");
     return raw ? JSON.parse(raw) : { attempts: 0, lockedUntil: 0 };
   } catch {
     return { attempts: 0, lockedUntil: 0 };
@@ -25,12 +28,12 @@ function getLockState(): { attempts: number; lockedUntil: number } {
 
 function saveLockState(state: { attempts: number; lockedUntil: number }) {
   try {
-    sessionStorage.setItem("_login_lock", JSON.stringify(state));
-  } catch { /* sessionStorage unavailable — fail gracefully */ }
+    localStorage.setItem("_login_lock", JSON.stringify(state));
+  } catch { /* localStorage unavailable — fail gracefully */ }
 }
 
 function clearLockState() {
-  try { sessionStorage.removeItem("_login_lock"); } catch { /* ignore */ }
+  try { localStorage.removeItem("_login_lock"); } catch { /* ignore */ }
 }
 
 export default function Login() {

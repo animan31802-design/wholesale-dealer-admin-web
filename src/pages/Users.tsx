@@ -133,7 +133,9 @@ export default function Users() {
         assignedRegions: [],
         isActive: true,
         createdAt: new Date().toISOString(),
-      };
+        // Audit: record which admin created this account
+        ...(currentUser?.uid ? { createdBy: currentUser.uid, createdByName: currentUser.name } : {}),
+      } as AppUser & { createdBy?: string; createdByName?: string };
       await setDoc(doc(db, "users", result.user.uid), newUser);
       await secondaryAuth.signOut();
       setForm({ name: "", email: "", password: "", phone: "", role: "field_agent" });

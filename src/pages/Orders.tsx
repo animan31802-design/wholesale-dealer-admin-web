@@ -3,7 +3,7 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   collection, onSnapshot, doc, updateDoc, orderBy, query, getDoc, runTransaction,
-  getDocs
+  getDocs, where
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Order, AppUser } from "../types";
@@ -102,7 +102,7 @@ export default function Orders() {
       setOrders(all);
       setLoading(false);
     });
-    getDocs(query(collection(db, "users"))).then((snap) => {
+    getDocs(query(collection(db, "users"), where("role", "==", "delivery"))).then((snap) => {
       setAllUsers(snap.docs.map((d) => d.data() as AppUser));
     });
     return () => { unsub(); };
@@ -161,17 +161,28 @@ export default function Orders() {
     const ids = [...selectedIds].filter((id) =>
       orders.find((o) => o.id === id)?.status === "packed"
     );
-    await Promise.all(
+    // Use transactions per order so we re-validate status is still "packed"
+    // before writing — prevents assigning an already-cancelled/delivered order.
+    const results = await Promise.allSettled(
       ids.map((id) =>
-        updateDoc(doc(db, "orders", id), {
-          deliveryPersonId:   person.uid,
-          deliveryPersonName: person.name,
-          vehicleNumber:      vehicle,
-          status:             "assigned",
-          assignedAt:         new Date().toISOString(),
+        runTransaction(db, async (t) => {
+          const snap = await t.get(doc(db, "orders", id));
+          if (!snap.exists()) throw new Error(`Order ${id} not found.`);
+          if (snap.data().status !== "packed") throw new Error(`Order ${id} is no longer packed.`);
+          t.update(doc(db, "orders", id), {
+            deliveryPersonId:   person.uid,
+            deliveryPersonName: person.name,
+            vehicleNumber:      vehicle,
+            status:             "assigned",
+            assignedAt:         new Date().toISOString(),
+          });
         })
       )
     );
+    const failed = results.filter((r) => r.status === "rejected").length;
+    if (failed > 0) {
+      alert(`${failed} order(s) could not be assigned (status changed). Please refresh.`);
+    }
     setSelectedIds(new Set());
     setShowBulkAssign(false);
   };
@@ -1493,6 +1504,11 @@ function PartialReturnModal({ order, onClose, onDone }: {
           const data = snap.data();
           if (!data.trackInventory) return;
           const returnQty = returnQtys[itemsWithReturn[i].productId] || 0;
+          // Server-side cap: never restore more than was originally delivered
+          const maxAllowed = itemsWithReturn[i].quantity - ((itemsWithReturn[i] as any).returnedQty || 0);
+          if (returnQty > maxAllowed) {
+            throw new Error(`Return qty for "${itemsWithReturn[i].productName}" exceeds delivered qty.`);
+          }
           t.update(productRefs[i], { stock: (data.stock || 0) + returnQty });
         });
 

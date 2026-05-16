@@ -56,10 +56,36 @@ async function getNextInvoiceNumber(prefix: string): Promise<string> {
       serial = current + 1;
       t.set(counterRef, { lastSerial: serial }, { merge: true });
     });
-  } catch {
-    serial = 1;
+  } catch (err: any) {
+    // Firestore permission error = packing staff cannot write invoiceCounter.
+    // Surface the error clearly so it can be fixed (add invoiceCounter rule or
+    // move to a Cloud Function) rather than silently colliding on serial 1.
+    const isPermission = err?.code === "permission-denied" || (err?.message ?? "").includes("Missing or insufficient permissions");
+    if (isPermission) {
+      console.error(
+        "INVOICE COUNTER: packing_staff lacks write permission on settings/invoiceCounter. " +
+        "Add a Firestore rule or move getNextInvoiceNumber to a callable Cloud Function."
+      );
+      // Fall back to a timestamp-based unique suffix to avoid collision
+      serial = Date.now();
+    } else {
+      serial = 1;
+    }
   }
   return `${prefix}/${year}/${String(serial).padStart(5, "0")}`;
+}
+
+// ─── XSS safety: escape all user-controlled strings before HTML injection ────
+// All Firestore-sourced text (names, addresses, notes, product names) must be
+// escaped before being written into innerHTML.
+function esc(text: unknown): string {
+  if (text == null) return "";
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 // ─── Math helpers ─────────────────────────────────────────────────────────────
@@ -183,10 +209,10 @@ function buildInvoiceHTML(params: {
     const cgstRate = gstPct / 2;
     return `<tr>
       <td style="${cv}text-align:center">${i + 1}</td>
-      <td style="${cv}">${item.productName}</td>
-      <td style="${cv}text-align:center">${item.hsn || ""}</td>
+      <td style="${cv}">${esc(item.productName)}</td>
+      <td style="${cv}text-align:center">${esc(item.hsn) || ""}</td>
       <td style="${cv}text-align:center">${item.quantity}</td>
-      <td style="${cv}text-align:center">${item.unit}</td>
+      <td style="${cv}text-align:center">${esc(item.unit)}</td>
       <td style="${cv}text-align:right">${taxableValue.toFixed(3)}</td>
       <td style="${cv}text-align:center">${gstPct > 0 ? `${cgstRate}%` : ""}</td>
       <td style="${cv}text-align:right">${gstPct > 0 ? lineCGST.toFixed(3) : ""}</td>
@@ -201,9 +227,9 @@ function buildInvoiceHTML(params: {
     const { lineTotal } = lineAmounts[i];
     return `<tr>
       <td style="${cv}text-align:center">${i + 1}</td>
-      <td style="${cv}">${item.productName}</td>
+      <td style="${cv}">${esc(item.productName)}</td>
       <td style="${cv}text-align:center">${item.quantity}</td>
-      <td style="${cv}text-align:center">${item.unit}</td>
+      <td style="${cv}text-align:center">${esc(item.unit)}</td>
       <td style="${cv}text-align:right">${item.price.toFixed(2)}</td>
       <td style="${cv}text-align:right;font-weight:600">${lineTotal.toFixed(2)}</td>
     </tr>`;
@@ -259,10 +285,10 @@ function buildInvoiceHTML(params: {
       <td colspan="${colspan}" style="${c}font-size:10px">
         <strong>Payment Details:</strong>&nbsp;
         ${[
-          biz?.bankName      ? `Bank: ${biz.bankName}` : "",
-          biz?.accountNumber ? `A/C: ${biz.accountNumber}` : "",
-          biz?.ifscCode      ? `IFSC: ${biz.ifscCode}` : "",
-          biz?.upiId         ? `UPI: ${biz.upiId}` : "",
+          biz?.bankName      ? `Bank: ${esc(biz.bankName)}` : "",
+          biz?.accountNumber ? `A/C: ${esc(biz.accountNumber)}` : "",
+          biz?.ifscCode      ? `IFSC: ${esc(biz.ifscCode)}` : "",
+          biz?.upiId         ? `UPI: ${esc(biz.upiId)}` : "",
         ].filter(Boolean).join("  |  ")}
       </td>
     </tr>` : "";
@@ -432,54 +458,54 @@ function buildInvoiceHTML(params: {
     isGST
       ? `
       <td colspan="3" style="${c};text-align:left;padding-left:14px;">
-        ${biz?.gstin ? `<div class="small"><b>GSTIN:</b> ${biz.gstin}</div>` : ""}
-        ${biz?.phone ? `<div class="small" style="margin-top:8px;"><b>MOBILE:</b> ${biz.phone}</div>` : ""}
-        ${biz?.email ? `<div class="small" style="margin-top:8px;"><b>EMAIL:</b> ${biz.email}</div>` : ""}
+        ${biz?.gstin ? `<div class="small"><b>GSTIN:</b> ${esc(biz.gstin)}</div>` : ""}
+        ${biz?.phone ? `<div class="small" style="margin-top:8px;"><b>MOBILE:</b> ${esc(biz.phone)}</div>` : ""}
+        ${biz?.email ? `<div class="small" style="margin-top:8px;"><b>EMAIL:</b> ${esc(biz.email)}</div>` : ""}
       </td>
 
       <td colspan="6" style="${c}" class="center">
-        <div class="big">${biz?.businessName || "PTM MILL"}</div>
+        <div class="big">${esc(biz?.businessName) || "PTM MILL"}</div>
 
         <div style="margin-top:8px;font-size:10px;">
-          ${addrParts}
+          ${esc(addrParts)}
         </div>
       </td>
 
       <td colspan="3" style="${c};text-align:left;padding-left:14px;">
-        <div class="small"><b>S NO:</b> ${invoiceNumber}</div>
+        <div class="small"><b>S NO:</b> ${esc(invoiceNumber)}</div>
 
         <div class="small" style="margin-top:8px;">
           <b>DATE:</b> ${dateStr}
         </div>
 
         <div class="small" style="margin-top:8px;">
-          <b>VEHICLE NO:</b> ${order.vehicleNumber || ""}
+          <b>VEHICLE NO:</b> ${esc(order.vehicleNumber) || ""}
         </div>
       </td>
     `
       : `
       <td colspan="2" style="${c};text-align:left;padding-left:14px;">
-        ${biz?.phone ? `<div class="small" style="margin-top:8px;"><b>MOBILE:</b> ${biz.phone}</div>` : ""}
-        ${biz?.email ? `<div class="small" style="margin-top:8px;"><b>EMAIL:</b> ${biz.email}</div>` : ""}
+        ${biz?.phone ? `<div class="small" style="margin-top:8px;"><b>MOBILE:</b> ${esc(biz.phone)}</div>` : ""}
+        ${biz?.email ? `<div class="small" style="margin-top:8px;"><b>EMAIL:</b> ${esc(biz.email)}</div>` : ""}
       </td>
 
       <td colspan="2" style="${c}" class="center">
-        <div class="big">${biz?.businessName || "PTM MILL"}</div>
+        <div class="big">${esc(biz?.businessName) || "PTM MILL"}</div>
 
         <div style="margin-top:8px;font-size:10px;">
-          ${addrParts}
+          ${esc(addrParts)}
         </div>
       </td>
 
       <td colspan="2" style="${c};text-align:left;padding-left:14px;">
-        <div class="small"><b>S NO:</b> ${invoiceNumber}</div>
+        <div class="small"><b>S NO:</b> ${esc(invoiceNumber)}</div>
 
         <div class="small" style="margin-top:8px;">
           <b>DATE:</b> ${dateStr}
         </div>
 
         <div class="small" style="margin-top:8px;">
-          <b>VEHICLE NO:</b> ${order.vehicleNumber || ""}
+          <b>VEHICLE NO:</b> ${esc(order.vehicleNumber) || ""}
         </div>
       </td> 
       `
@@ -499,11 +525,11 @@ isGST
       <div class="small bold">CONSIGNOR</div>
 
       <div style="margin-top:18px;font-size:14px;font-weight:700;">
-        ${biz?.businessName || ""}
+        ${esc(biz?.businessName) || ""}
       </div>
 
       <div style="margin-top:6px;">
-        ${biz?.city || ""}
+        ${esc(biz?.city) || ""}
       </div>
 
     </td>
@@ -513,22 +539,22 @@ isGST
       <div class="small bold">CONSIGNEE</div>
 
       <div style="margin-top:12px;font-size:16px;font-weight:700;">
-        ${order.customerName}
+        ${esc(order.customerName)}
       </div>
 
       <div style="margin-top:5px;">
-        ${order.customerAddress || ""}
+        ${esc(order.customerAddress) || ""}
       </div>
 
       ${
         order.customerPhone
-          ? `<div style="margin-top:5px;">Ph: ${order.customerPhone}</div>`
+          ? `<div style="margin-top:5px;">Ph: ${esc(order.customerPhone)}</div>`
           : ""
       }
 
       ${
         customer?.gstin
-          ? `<div style="margin-top:5px;">GSTIN: ${customer.gstin}</div>`
+          ? `<div style="margin-top:5px;">GSTIN: ${esc(customer.gstin)}</div>`
           : ""
       }
 
@@ -591,16 +617,16 @@ isGST
       <div class="small bold">CONSIGNEE</div>
 
       <div style="margin-top:12px;font-size:16px;font-weight:700;">
-        ${order.customerName}
+        ${esc(order.customerName)}
       </div>
 
       <div style="margin-top:5px;">
-        ${order.customerAddress || ""}
+        ${esc(order.customerAddress) || ""}
       </div>
 
       ${
         order.customerPhone
-          ? `<div style="margin-top:5px;">Ph: ${order.customerPhone}</div>`
+          ? `<div style="margin-top:5px;">Ph: ${esc(order.customerPhone)}</div>`
           : ""
       }
 

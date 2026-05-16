@@ -649,9 +649,15 @@ export default function CreateOrderPage() {
       let newOrderId = "";
 
       await runTransaction(db, async (t) => {
-        // ── READ PHASE: verify live stock ─────────────────────────
+        // ── READ PHASE: ALL reads must come before any writes ─────
         const productRefs  = billItems.map((item) => doc(db, "products", item.productId));
-        const productSnaps = await Promise.all(productRefs.map((ref) => t.get(ref)));
+        const customerRef  = doc(db, "customers", customer.id!);
+
+        // Read products AND customer atomically before any writes
+        const [productSnaps, customerSnap] = await Promise.all([
+          Promise.all(productRefs.map((ref) => t.get(ref))),
+          t.get(customerRef),
+        ]);
 
         productSnaps.forEach((snap, i) => {
           const item = billItems[i];
@@ -736,9 +742,11 @@ export default function CreateOrderPage() {
         newOrderId     = orderRef.id;
         t.set(orderRef, orderPayload);
 
-        // Update customer outstanding due (prevBalance + orderTotal − advancePaid)
-        const newDue = round2(prevBalance + grandTotal - paid);
-        t.update(doc(db, "customers", customer.id!), { outstandingDue: newDue });
+        // Use the customerSnap already read in the READ PHASE above —
+        // no additional t.get() here, which would violate read-before-write rule.
+        const liveDue = customerSnap.exists() ? (customerSnap.data().outstandingDue ?? 0) : prevBalance;
+        const newDue  = round2(liveDue + grandTotal - paid);
+        t.update(customerRef, { outstandingDue: newDue });
       });
 
       // Success
