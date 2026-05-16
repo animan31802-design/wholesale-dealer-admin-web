@@ -96,9 +96,22 @@ export default function Users() {
     }
   };
 
+  // ── Password strength validation ─────────────────────────────────
+  const validatePassword = (pw: string): string | null => {
+    if (pw.length < 8)               return "Password must be at least 8 characters.";
+    if (!/[0-9]/.test(pw))           return "Password must contain at least one number.";
+    if (!/[^A-Za-z0-9]/.test(pw))    return "Password must contain at least one special character.";
+    return null;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+
+    // ── Validate password complexity before hitting Firebase ─────
+    const pwError = validatePassword(form.password);
+    if (pwError) { setError(pwError); return; }
+
     setSubmitting(true);
     const secondaryApp = initializeApp(
       {
@@ -302,7 +315,7 @@ export default function Users() {
               {[
                 { label: "Full Name", key: "name", type: "text", placeholder: "e.g. Ravi Kumar" },
                 { label: "Email", key: "email", type: "email", placeholder: "ravi@example.com" },
-                { label: "Password", key: "password", type: "password", placeholder: "Min 6 characters" },
+                { label: "Password", key: "password", type: "password", placeholder: "Min 8 chars, 1 number, 1 special char" },
                 { label: "Phone", key: "phone", type: "text", placeholder: "9876543210" },
               ].map((field) => (
                 <div key={field.key}>

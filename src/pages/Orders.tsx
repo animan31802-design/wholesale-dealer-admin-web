@@ -138,12 +138,23 @@ export default function Orders() {
   };
 
   const markPacked = async (orderId: string) => {
-    await updateDoc(doc(db, "orders", orderId), {
-      status: "packed",
-      packedAt: new Date().toISOString(),
-      packedBy: user?.uid,
-      packedByName: user?.name,
-    });
+    // FIX (MEDIUM): Use a transaction so we verify status is still "pending"
+    // before writing — prevents double-packing on stale UI / race conditions.
+    try {
+      await runTransaction(db, async (t) => {
+        const snap = await t.get(doc(db, "orders", orderId));
+        if (!snap.exists()) throw new Error("Order not found.");
+        if (snap.data().status !== "pending") throw new Error("Order is no longer pending.");
+        t.update(doc(db, "orders", orderId), {
+          status: "packed",
+          packedAt: new Date().toISOString(),
+          packedBy: user?.uid,
+          packedByName: user?.name,
+        });
+      });
+    } catch (err: any) {
+      alert(err.message || "Could not mark as packed. Please refresh and try again.");
+    }
   };
 
   const bulkAssignDelivery = async (person: AppUser, vehicle: string) => {
@@ -771,14 +782,18 @@ function InvoiceModal({ order, onClose }: { order: Order; onClose: () => void })
                       });
                     } else {
                       // Fallback: open WhatsApp with text message (desktop)
-                      const phone = (order.customerPhone || "").replace(/[^\d]/g, "");
-                      const msg   = encodeURIComponent(
-                        `Dear ${order.customerName},
-Your invoice for ₹${order.totalAmount.toFixed(2)} is ready. Please download it from the link shared separately.
-Thank you!`
-                      );
-                      const wa = `https://wa.me/${phone.length >= 10 ? "91" + phone.slice(-10) : ""}?text=${msg}`;
-                      window.open(wa, "_blank");
+                      // FIX (LOW): Validate phone before opening WhatsApp
+                      const rawPhone = (order.customerPhone || "").replace(/[^\d]/g, "");
+                      const phone10  = rawPhone.slice(-10);
+                      if (phone10.length < 10) {
+                        alert("No valid phone number on record for this customer. Cannot open WhatsApp.");
+                      } else {
+                        const msg = encodeURIComponent(
+                          `Dear ${order.customerName},\nYour invoice for ₹${order.totalAmount.toFixed(2)} is ready. Please download it from the link shared separately.\nThank you!`
+                        );
+                        const wa = `https://wa.me/91${phone10}?text=${msg}`;
+                        window.open(wa, "_blank");
+                      }
                     }
                   } catch (err: any) {
                     if (err.name !== "AbortError") alert("Could not share: " + err.message);
@@ -1519,6 +1534,12 @@ function PartialReturnModal({ order, onClose, onDone }: {
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {/* FIX (MEDIUM): Warn clearly when a return was already filed */}
+          {order.items.some((item) => (item as any).returnedQty > 0) && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-700">
+              ⚠️ A return has already been filed for this order. You can only return the remaining quantity for each item.
+            </div>
+          )}
           <div className="bg-orange-50 border border-orange-100 rounded-xl px-4 py-3 text-xs text-orange-700">
             Enter the quantity returned for each product. Stock will be restored automatically.
           </div>

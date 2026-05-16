@@ -626,6 +626,22 @@ export default function CreateOrderPage() {
     if (paid < 0)                { setMessage("Advance amount cannot be negative"); return; }
     if (paid > totalOwed + 0.01) { setMessage("Advance exceeds total payable"); return; }
 
+    // ── Credit limit enforcement ──────────────────────────────────
+    // Check if placing this order would push the customer over their credit ceiling.
+    if (customer.creditLimit && customer.creditLimit > 0) {
+      const newOutstanding = round2(prevBalance + grandTotal - paid);
+      if (newOutstanding > customer.creditLimit) {
+        const over = round2(newOutstanding - customer.creditLimit);
+        const proceed = window.confirm(
+          `⚠️ Credit limit warning\n\n` +
+          `${customer.shopName} has a credit limit of ₹${customer.creditLimit.toFixed(2)}.\n` +
+          `This order will put them ₹${over.toFixed(2)} over their limit.\n\n` +
+          `Do you want to proceed anyway?`
+        );
+        if (!proceed) { setIsSaving(false); return; }
+      }
+    }
+
     setIsSaving(true);
     setMessage("");
 
@@ -791,6 +807,16 @@ export default function CreateOrderPage() {
   };
 
   const handleSelectCustomer = (c: Customer) => {
+    // FIX (INFO): Save current customer's cart as draft before switching, then
+    // clear cartQty so stale quantities never bleed into a different customer's order.
+    if (customer && customer.id !== c.id) {
+      if (Object.keys(cartQty).length > 0) {
+        draftStore[customer.id!] = { ...cartQty };
+      } else {
+        delete draftStore[customer.id!];
+      }
+      setCartQty({});
+    }
     setCustomer(c);
     setStep("billing");
     setView("products");

@@ -7,19 +7,41 @@ import { useAuthStore } from "../store/authStore";
 import { AppUser } from "../types";
 
 // ── Brute-force constants ─────────────────────────────────────────
-const MAX_ATTEMPTS   = 5;   // lock after this many failures
-const LOCKOUT_MS     = 60_000; // 60 seconds
+// NOTE: These are client-side guards only (UX layer). For production,
+// enable Firebase App Check + reCAPTCHA Enterprise in the Firebase console
+// for true server-side brute-force protection.
+const MAX_ATTEMPTS = 5;
+const LOCKOUT_MS   = 60_000; // 60 seconds
+
+// ── Persist lockout in sessionStorage so page-refresh doesn't reset it ──
+function getLockState(): { attempts: number; lockedUntil: number } {
+  try {
+    const raw = sessionStorage.getItem("_login_lock");
+    return raw ? JSON.parse(raw) : { attempts: 0, lockedUntil: 0 };
+  } catch {
+    return { attempts: 0, lockedUntil: 0 };
+  }
+}
+
+function saveLockState(state: { attempts: number; lockedUntil: number }) {
+  try {
+    sessionStorage.setItem("_login_lock", JSON.stringify(state));
+  } catch { /* sessionStorage unavailable — fail gracefully */ }
+}
+
+function clearLockState() {
+  try { sessionStorage.removeItem("_login_lock"); } catch { /* ignore */ }
+}
 
 export default function Login() {
-  const [email, setEmail]     = useState("");
+  const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError]     = useState("");
-  const [loading, setLoading] = useState(false);
+  const [error, setError]       = useState("");
+  const [loading, setLoading]   = useState(false);
+  const [lockMsg, setLockMsg]   = useState("");
 
-  // Brute-force state (kept in refs so they survive re-renders without causing them)
-  const attempts   = useRef(0);
-  const lockedUntil = useRef<number>(0);
-  const [lockMsg, setLockMsg] = useState("");
+  // Derive initial lock state from sessionStorage so refresh doesn't bypass it
+  const lockState = useRef(getLockState());
 
   const { logout } = useAuthStore();
   const navigate   = useNavigate();
@@ -27,13 +49,15 @@ export default function Login() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // ── Lockout check ─────────────────────────────────────────────
-    const now = Date.now();
-    if (lockedUntil.current > now) {
-      const secs = Math.ceil((lockedUntil.current - now) / 1000);
+    // ── Lockout check (survives page reload via sessionStorage) ───
+    const state = lockState.current;
+    const now   = Date.now();
+    if (state.lockedUntil > now) {
+      const secs = Math.ceil((state.lockedUntil - now) / 1000);
       setLockMsg(`Too many failed attempts. Please wait ${secs}s before trying again.`);
       return;
     }
+
     setLockMsg("");
     setError("");
     setLoading(true);
@@ -42,13 +66,13 @@ export default function Login() {
       const result = await signInWithEmailAndPassword(auth, email, password);
 
       // Reset failure counter on successful Firebase auth
-      attempts.current = 0;
+      lockState.current = { attempts: 0, lockedUntil: 0 };
+      clearLockState();
 
       // ── Validate user doc exists ──────────────────────────────
       const userDoc = await getDoc(doc(db, "users", result.user.uid));
       if (!userDoc.exists()) {
         await signOut(auth);
-        // Generic message — don't reveal account existence
         setError("Invalid email or password.");
         return;
       }
@@ -70,17 +94,19 @@ export default function Login() {
         return;
       }
 
-      // Don't setUser here — App.tsx onAuthStateChanged handles it
       navigate(userData.role === "packing_staff" ? "/orders" : "/");
     } catch {
       // ── Count failures & apply lockout ────────────────────────
-      attempts.current += 1;
-      if (attempts.current >= MAX_ATTEMPTS) {
-        lockedUntil.current = Date.now() + LOCKOUT_MS;
-        attempts.current = 0;
+      const newAttempts = (lockState.current.attempts || 0) + 1;
+      if (newAttempts >= MAX_ATTEMPTS) {
+        const newState = { attempts: 0, lockedUntil: Date.now() + LOCKOUT_MS };
+        lockState.current = newState;
+        saveLockState(newState);
         setLockMsg(`Too many failed attempts. Please wait ${LOCKOUT_MS / 1000}s before trying again.`);
       } else {
-        // Always use a generic message — never reveal whether email exists
+        const newState = { attempts: newAttempts, lockedUntil: 0 };
+        lockState.current = newState;
+        saveLockState(newState);
         setError("Invalid email or password.");
       }
     } finally {
@@ -88,7 +114,7 @@ export default function Login() {
     }
   };
 
-  const isLocked = Date.now() < lockedUntil.current;
+  const isLocked = Date.now() < lockState.current.lockedUntil;
 
   return (
     <div className="min-h-screen bg-gray-900 flex items-center justify-center px-4">

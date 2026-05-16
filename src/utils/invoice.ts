@@ -1,7 +1,7 @@
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import QRCode from "qrcode";
-import { doc, getDoc, runTransaction, collection, getDocs } from "firebase/firestore";
+import { doc, getDoc, updateDoc, runTransaction, collection, getDocs } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Order, Customer, InvoiceType, BillingMode, OrderItem, Product } from "../types";
 import { BusinessSettings } from "../pages/Settings";
@@ -951,7 +951,19 @@ export async function buildInvoicePDF(
   })();
 
   const advancePaid: number = (order as any).advancePaid ?? order.amountCollected ?? 0;
-  const invoiceNumber       = order.invoiceNumber || (await getNextInvoiceNumber(prefix));
+    // FIX (MEDIUM): Persist the invoice number back to the order so re-opening
+  // the invoice modal reuses the same serial number instead of minting a new one.
+  let invoiceNumber = order.invoiceNumber || "";
+  if (!invoiceNumber) {
+    invoiceNumber = await getNextInvoiceNumber(prefix);
+    if (order.id) {
+      try {
+        await updateDoc(doc(db, "orders", order.id), { invoiceNumber });
+      } catch {
+        // Non-fatal — PDF still generated; number just won't be persisted if offline.
+      }
+    }
+  }
 
   // ── Compute amounts for QR ────────────────────────────────────
   // Mirrors the same logic as buildInvoiceHTML so QR matches what's printed
