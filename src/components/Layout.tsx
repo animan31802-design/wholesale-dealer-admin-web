@@ -24,6 +24,7 @@ const adminNavItems: NavItem[] = [
   { path: "/products", label: "Products", icon: "🛒" },
   { path: "/customers", label: "Customers", icon: "🏪" },
   { path: "/users", label: "Users", icon: "👥" },
+  { path: "/agent-cash", label: "Agent Cash", icon: "💵" },
 
   // Reports Group
   {

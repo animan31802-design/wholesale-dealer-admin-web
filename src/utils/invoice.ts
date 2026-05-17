@@ -1,10 +1,11 @@
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import QRCode from "qrcode";
-import { doc, getDoc, updateDoc, runTransaction, collection, getDocs } from "firebase/firestore";
+import { doc, getDoc, runTransaction, collection, getDocs } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Order, Customer, InvoiceType, BillingMode, OrderItem, Product } from "../types";
 import { BusinessSettings } from "../pages/Settings";
+import { NOTO_TAMIL_REGULAR_B64, NOTO_TAMIL_BOLD_B64 } from "./invoiceFonts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -73,6 +74,14 @@ async function getNextInvoiceNumber(prefix: string): Promise<string> {
     }
   }
   return `${prefix}/${year}/${String(serial).padStart(5, "0")}`;
+}
+
+// ─── Exported: mint the next invoice number atomically ───────────────────────
+// Call this ONCE per invoice. Pass the result into buildInvoicePDF via
+// order.invoiceNumber. buildInvoicePDF will skip the counter if the order
+// already has an invoiceNumber set.
+export async function mintInvoiceNumber(prefix: string): Promise<string> {
+  return getNextInvoiceNumber(prefix);
 }
 
 // ─── XSS safety: escape all user-controlled strings before HTML injection ────
@@ -302,14 +311,16 @@ function buildInvoiceHTML(params: {
 <style>
   @font-face {
     font-family: 'NotoTamil';
-    src: url('/fonts/NotoSansTamil-Regular.ttf') format('truetype');
+    src: url('data:font/truetype;base64,${NOTO_TAMIL_REGULAR_B64}') format('truetype');
     font-weight: normal;
+    font-display: block;
   }
 
   @font-face {
     font-family: 'NotoTamil';
-    src: url('/fonts/NotoSansTamil-Bold.ttf') format('truetype');
+    src: url('data:font/truetype;base64,${NOTO_TAMIL_BOLD_B64}') format('truetype');
     font-weight: bold;
+    font-display: block;
   }
 
   *{
@@ -976,35 +987,38 @@ export async function buildInvoicePDF(
     return Math.max(0, round2(currentDue - orderBalance));
   })();
 
-  const advancePaid: number = (order as any).advancePaid ?? order.amountCollected ?? 0;
-    // FIX (MEDIUM): Persist the invoice number back to the order so re-opening
-  // the invoice modal reuses the same serial number instead of minting a new one.
-  let invoiceNumber = order.invoiceNumber || "";
+  // advancePaid: prefer the explicit field; fall back to amountCollected only
+  // for already-delivered orders. For pending orders both may be 0 — that's correct,
+  // the QR then encodes the full balance due.
+  const advancePaid: number = (() => {
+    if ((order as any).advancePaid !== undefined) return (order as any).advancePaid as number;
+    if (order.status === "delivered" && order.amountCollected !== undefined) return order.amountCollected;
+    return 0;
+  })();
+
+  // Invoice number — use what's already saved; never mint a new one here.
+  // Minting is done exclusively in InvoiceModal.handleGenerate().
+  const invoiceNumber = order.invoiceNumber || "";
   if (!invoiceNumber) {
-    invoiceNumber = await getNextInvoiceNumber(prefix);
-    if (order.id) {
-      try {
-        await updateDoc(doc(db, "orders", order.id), { invoiceNumber });
-      } catch {
-        // Non-fatal — PDF still generated; number just won't be persisted if offline.
-      }
-    }
+    // Defensive: shouldn't reach here with the new modal flow, but keeps
+    // backward compatibility for any direct calls during testing.
+    console.warn("[invoice] buildInvoicePDF called without invoiceNumber — counter NOT incremented, PDF will show blank number.");
   }
 
   // ── Compute amounts for QR ────────────────────────────────────
-  // Mirrors the same logic as buildInvoiceHTML so QR matches what's printed
   const computedTotal = round2(enrichedOrder.items.reduce((s, item) => {
     const { lineTotal } = computeLineAmounts(item, isGST);
     return s + lineTotal;
   }, 0));
   const totalPayable      = computedTotal + (showDue ? historicalDue : 0);
   const balanceOnDelivery = Math.max(0, round2(totalPayable - advancePaid));
-  // QR amount = what the customer still owes at the point of delivery
+  // QR encodes what the customer still owes. If nothing is owed (fully pre-paid), skip QR.
   const qrAmount = balanceOnDelivery;
 
-  // ── Generate UPI QR if UPI ID is configured ──────────────────
-  const qrDataUrl = biz?.upiId && qrAmount > 0
-    ? await generateUpiQrDataUrl(biz.upiId, biz.businessName || "Payment", qrAmount)
+  // ── Generate UPI QR if UPI ID is configured and amount > 0 ───
+  const upiId = (biz?.upiId || "").trim();
+  const qrDataUrl = upiId && qrAmount > 0
+    ? await generateUpiQrDataUrl(upiId, (biz?.businessName || "Payment").trim(), qrAmount)
     : "";
 
   const html = buildInvoiceHTML({
@@ -1012,46 +1026,116 @@ export async function buildInvoicePDF(
     isGST, showDue, historicalDue, advancePaid, qrDataUrl,
   });
 
-  // Mount off-screen
-  const container = document.createElement("div");
-  container.style.cssText = "position:fixed;left:-9999px;top:0;width:794px;background:#fff;z-index:-1";
-  container.innerHTML = html;
-  document.body.appendChild(container);
-
-  // Wait for NotoTamil fonts to load before capturing
-  await document.fonts.ready;
+  // ── Render using a hidden iframe so the full HTML document renders correctly ──
+  // A plain div cannot host <!DOCTYPE html> — styles get stripped and html2canvas
+  // captures a blank page. An iframe creates a real document context.
+  const iframe = document.createElement("iframe");
+  iframe.style.cssText = [
+    "position:fixed",
+    "left:-9999px",
+    "top:-9999px",
+    "width:794px",
+    "height:1123px",   // A4 at 96dpi — iframe needs an explicit height
+    "border:none",
+    "opacity:0",
+    "pointer-events:none",
+    "z-index:-9999",
+  ].join(";");
+  document.body.appendChild(iframe);
 
   try {
-    const canvas = await html2canvas(container, {
+    // Write the full HTML document into the iframe
+    const iframeDoc = iframe.contentDocument!;
+    iframeDoc.open();
+    iframeDoc.write(html);
+    iframeDoc.close();
+
+    // Wait for iframe to fully load (fonts, images, layout)
+    await new Promise<void>((resolve) => {
+      if (iframe.contentDocument?.readyState === "complete") {
+        resolve();
+      } else {
+        iframe.onload = () => resolve();
+      }
+    });
+
+    // Extra rAF yield to let the browser paint the iframe contents
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+
+    // Wait for fonts inside the iframe document to be ready
+    await (iframe.contentDocument as any).fonts?.ready;
+
+    // Wait for all images inside the iframe to decode
+    const images = Array.from(iframe.contentDocument!.querySelectorAll("img"));
+    await Promise.all(
+      images.map((img) =>
+        img.complete
+          ? (img as any).decode?.().catch(() => {}) ?? Promise.resolve()
+          : new Promise<void>((resolve) => {
+              img.onload  = () => resolve();
+              img.onerror = () => resolve();
+            })
+      )
+    );
+
+    // Measure actual content height to size canvas correctly
+    const body = iframe.contentDocument!.body;
+    const actualHeight = Math.max(
+      body.scrollHeight,
+      body.offsetHeight,
+      iframe.contentDocument!.documentElement.scrollHeight,
+    );
+
+    // Resize iframe to full content height before capture
+    iframe.style.height = `${actualHeight}px`;
+    // Another yield after resize
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+
+    // Capture the iframe body
+    const canvas = await html2canvas(body, {
       scale: 2,
       useCORS: true,
+      allowTaint: true,
       backgroundColor: "#ffffff",
       logging: false,
+      imageTimeout: 15000,
+      width:  794,
+      height: actualHeight,
+      windowWidth:  794,
+      windowHeight: actualHeight,
     } as any);
 
-    const imgData = canvas.toDataURL("image/png");
-    const pdf     = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-    const pdfW    = pdf.internal.pageSize.getWidth();
-    const pdfH    = pdf.internal.pageSize.getHeight();
+    if (canvas.width === 0 || canvas.height === 0) {
+      throw new Error("html2canvas returned an empty canvas — content did not render.");
+    }
 
-    const ratio      = pdfW / canvas.width;
-    const imgH       = canvas.height * ratio;
-    let   heightLeft = imgH;
-    let   position   = 0;
+    // Build PDF with JPEG (reliable across all browsers, no corrupt-PNG issues)
+    const pdf  = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+    const pdfW = pdf.internal.pageSize.getWidth();
+    const pdfH = pdf.internal.pageSize.getHeight();
 
-    pdf.addImage(imgData, "PNG", 0, position, pdfW, imgH);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
+    const ratio   = pdfW / canvas.width;
+    const imgH    = canvas.height * ratio;
+
+    let heightLeft = imgH;
+    let position   = 0;
+
+    pdf.addImage(dataUrl, "JPEG", 0, position, pdfW, imgH);
     heightLeft -= pdfH;
 
-    while (heightLeft > 0) {
+    while (heightLeft > 0.5) {  // 0.5mm epsilon — prevents phantom extra page from float imprecision
       position  -= pdfH;
       pdf.addPage();
-      pdf.addImage(imgData, "PNG", 0, position, pdfW, imgH);
+      pdf.addImage(dataUrl, "JPEG", 0, position, pdfW, imgH);
       heightLeft -= pdfH;
     }
 
     return pdf;
   } finally {
-    document.body.removeChild(container);
+    if (iframe.parentNode) {
+      document.body.removeChild(iframe);
+    }
   }
 }
 

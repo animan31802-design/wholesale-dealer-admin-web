@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import {
   collection, getDocs, addDoc, updateDoc,
-  deleteDoc, doc, orderBy, query
+  deleteDoc, doc, orderBy, query, where, setDoc, runTransaction
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Customer, Region } from "../types";
@@ -537,20 +537,124 @@ function LedgerModal({ customer, isAdmin, onClose }: {
   const fetchOrders = async () => {
     setOrdersLoading(true);
     try {
-      const { getDocs, collection: col, query: q, where, orderBy: ob } = await import("firebase/firestore");
+      // Use top-level imports (already imported at file top)
       const snap = await getDocs(
-        q(col(db, "orders"), where("customerId", "==", customer.id), ob("createdAt", "desc"))
+        query(collection(db, "orders"), where("customerId", "==", customer.id), orderBy("createdAt", "desc"))
       );
       setCustOrders(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Order)));
-    } catch { setCustOrders([]); }
-    finally { setOrdersLoading(false); }
+    } catch (e) {
+      console.error("Orders fetch error:", e);
+      setCustOrders([]);
+    } finally {
+      setOrdersLoading(false);
+    }
   };
 
   const fetchLedger = async () => {
     setLoading(true);
-    const data = await getLedger(customer.id!);
-    setEntries(data);
-    setLoading(false);
+    try {
+      let data = await getLedger(customer.id!);
+
+      // ── Dedup: remove duplicate entries for the same orderId+type written by
+      //    a previous buggy backfill run. Keep only the first entry per orderId+type.
+      if (data.length > 0) {
+        const seen = new Set<string>();
+        const { deleteDoc: dd, doc: fdoc } = await import("firebase/firestore");
+        for (const entry of data) {
+          if (!entry.orderId) continue;
+          const key = entry.orderId + "__" + entry.type + "__" + entry.direction;
+          if (seen.has(key)) {
+            // Duplicate — delete it from Firestore
+            try {
+              await dd(fdoc(db, "customers", customer.id!, "payments", entry.id!));
+            } catch (_) {}
+          } else {
+            seen.add(key);
+          }
+        }
+        // Re-fetch cleaned data
+        data = await getLedger(customer.id!);
+      }
+
+      // ── Backfill: if ledger is empty but customer has orders,
+      //    auto-generate ledger entries so history shows up correctly.
+      //    Uses orderId deduplication to prevent double-writing.
+      if (data.length === 0 && (customer.outstandingDue ?? 0) !== 0) {
+        const ordSnap = await getDocs(
+          query(collection(db, "orders"), where("customerId", "==", customer.id), orderBy("createdAt", "asc"))
+        );
+        const orders = ordSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Order));
+
+        // Check existing ledger entries by orderId to avoid duplicates
+        const existingSnap = await getDocs(
+          query(collection(db, "customers", customer.id!, "payments"), orderBy("createdAt", "asc"))
+        );
+        const writtenOrderIds = new Set(
+          existingSnap.docs.map((d) => d.data().orderId).filter(Boolean)
+        );
+
+        const ledgerCol = collection(db, "customers", customer.id!, "payments");
+
+        for (const o of orders.filter((o) => o.status !== "cancelled")) {
+          // Skip if already backfilled for this order
+          if (writtenOrderIds.has(o.id)) continue;
+
+          const advance = (o as any).advancePaid ?? 0;
+
+          // Debit: order placed
+          await addDoc(ledgerCol, {
+            type:          "order_placed",
+            direction:     "debit",
+            amount:        o.totalAmount,
+            orderId:       o.id,
+            orderAmount:   o.totalAmount,
+            note:          "Order #" + (o.id ?? "").slice(0, 8).toUpperCase() + " placed (backfilled)",
+            createdBy:     o.agentId ?? "system",
+            createdByName: o.agentName ?? "System",
+            createdAt:     o.createdAt ?? new Date().toISOString(),
+          });
+
+          // Credit: advance paid at order creation
+          if (advance > 0) {
+            await addDoc(ledgerCol, {
+              type:          "delivery_payment",
+              direction:     "credit",
+              amount:        advance,
+              orderId:       o.id,
+              note:          "Advance collected at order #" + (o.id ?? "").slice(0, 8).toUpperCase() + " (backfilled)",
+              createdBy:     o.agentId ?? "system",
+              createdByName: o.agentName ?? "System",
+              createdAt:     o.createdAt ?? new Date().toISOString(),
+            });
+          }
+
+          // Credit: delivery collection (if more was collected than advance)
+          if (o.status === "delivered" && (o.amountCollected ?? 0) > advance) {
+            const deliveryAmt = (o.amountCollected ?? 0) - advance;
+            await addDoc(ledgerCol, {
+              type:          "delivery_payment",
+              direction:     "credit",
+              amount:        deliveryAmt,
+              orderId:       o.id,
+              note:          "Payment collected at delivery for order #" + (o.id ?? "").slice(0, 8).toUpperCase() + " (backfilled)",
+              createdBy:     (o as any).deliveryPersonId ?? "system",
+              createdByName: (o as any).deliveryPersonName ?? "Delivery Agent",
+              createdAt:     (o as any).deliveredAt ?? o.createdAt ?? new Date().toISOString(),
+            });
+          }
+        }
+
+        // Re-fetch after backfill
+        data = await getLedger(customer.id!);
+      }
+
+      setEntries(data);
+    } catch (e) {
+      console.error("Ledger fetch error:", e);
+      setEntries([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { fetchLedger(); }, [customer.id]);
@@ -558,12 +662,22 @@ function LedgerModal({ customer, isAdmin, onClose }: {
 
   const balance = calcBalance(entries);
 
+  const [paymentMode, setPaymentMode] = useState<"cash"|"upi"|"bank"|"cheque">("cash");
+
   const handlePayment = async () => {
     const amt = parseFloat(amount);
     if (isNaN(amt) || amt <= 0) return;
+    if (amt > balance + 0.01) {
+      alert("Amount cannot exceed the current balance due.");
+      return;
+    }
     setSaving(true);
     try {
-      await recordManualPayment(customer.id!, amt, note, user!.uid, user!.name);
+      await recordManualPayment(
+        customer.id!, amt,
+        (note.trim() || "Manual payment") + " [" + paymentMode + "]",
+        user!.uid, user!.name
+      );
       setAmount(""); setNote("");
       await fetchLedger();
       setTab("ledger");
@@ -574,9 +688,10 @@ function LedgerModal({ customer, isAdmin, onClose }: {
   const handleAdjustment = async () => {
     const amt = parseFloat(amount);
     if (isNaN(amt) || amt === 0) return;
+    if (!note.trim()) return;
     setSaving(true);
     try {
-      await recordAdjustment(customer.id!, amt, note, user!.uid, user!.name);
+      await recordAdjustment(customer.id!, amt, note.trim(), user!.uid, user!.name);
       setAmount(""); setNote("");
       await fetchLedger();
       setTab("ledger");
@@ -779,79 +894,162 @@ function LedgerModal({ customer, isAdmin, onClose }: {
           {/* Record Payment tab */}
           {tab === "payment" && isAdmin && (
             <div className="p-6">
-              <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-5">
-                <p className="text-sm text-green-700 font-medium">Recording a payment will reduce the customer's outstanding balance.</p>
-              </div>
-              {balance > 0 && (
-                <div className="flex justify-between items-center bg-red-50 border border-red-100 rounded-lg px-4 py-3 mb-5">
-                  <span className="text-sm text-gray-600">Current Balance Due</span>
-                  <span className="font-bold text-red-600 text-lg">₹{balance.toFixed(2)}</span>
+              {balance <= 0 ? (
+                <div className="text-center py-12 text-gray-400">
+                  <p className="text-3xl mb-3">✅</p>
+                  <p className="font-medium text-green-600">No outstanding balance</p>
+                  <p className="text-sm mt-1">This customer has no pending dues</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {/* Current balance banner */}
+                  <div className="flex justify-between items-center bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+                    <span className="text-sm text-gray-600 font-medium">Current Balance Due</span>
+                    <span className="font-bold text-red-600 text-xl">₹{balance.toFixed(2)}</span>
+                  </div>
+
+                  {/* Amount input */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Amount Received (₹) *</label>
+                    <input type="number" min="0.01" step="0.01" value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                      placeholder="0.00"
+                      className={inp} />
+                    <div className="flex gap-2 mt-2 flex-wrap">
+                      <button onClick={() => setAmount(balance.toFixed(2))}
+                        className="text-xs bg-green-100 text-green-700 px-3 py-1 rounded-full hover:bg-green-200 font-medium">
+                        Full ₹{balance.toFixed(2)}
+                      </button>
+                      {[500, 1000, 2000].filter(v => v < balance).map(v => (
+                        <button key={v} onClick={() => setAmount(String(v))}
+                          className="text-xs bg-gray-100 text-gray-600 px-3 py-1 rounded-full hover:bg-gray-200">
+                          ₹{v}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Payment mode */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Payment Mode *</label>
+                    <div className="flex gap-2">
+                      {(["cash","upi","bank","cheque"] as const).map((m) => (
+                        <button key={m} onClick={() => setPaymentMode(m)}
+                          className={`flex-1 py-2 rounded-lg text-xs font-medium border capitalize transition-all ${
+                            paymentMode === m
+                              ? "bg-orange-500 text-white border-orange-500"
+                              : "bg-white text-gray-500 border-gray-200 hover:border-gray-300"
+                          }`}>
+                          {m === "upi" ? "UPI" : m.charAt(0).toUpperCase() + m.slice(1)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Note */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Note (optional)</label>
+                    <input value={note} onChange={(e) => setNote(e.target.value)}
+                      placeholder="e.g. Reference number, transaction ID..."
+                      className={inp} />
+                  </div>
+
+                  {/* Preview */}
+                  {amount && !isNaN(parseFloat(amount)) && parseFloat(amount) > 0 && (
+                    parseFloat(amount) > balance + 0.01 ? (
+                      <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-600 font-medium">
+                        ⚠️ Amount exceeds balance due. Max is ₹{balance.toFixed(2)}
+                      </div>
+                    ) : (
+                      <div className="bg-gray-50 rounded-lg px-4 py-3 text-sm flex justify-between">
+                        <span className="text-gray-500">Balance after payment:</span>
+                        <span className={`font-bold ${Math.max(0, balance - parseFloat(amount)) > 0 ? "text-red-600" : "text-green-600"}`}>
+                          ₹{Math.max(0, balance - parseFloat(amount)).toFixed(2)}
+                          {Math.max(0, balance - parseFloat(amount)) === 0 && "  ✓ Fully Cleared"}
+                        </span>
+                      </div>
+                    )
+                  )}
+
+                  <div className="flex gap-3 pt-2">
+                    <button onClick={() => setTab("ledger")} className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm">Cancel</button>
+                    <button onClick={handlePayment}
+                      disabled={saving || !amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0 || parseFloat(amount) > balance + 0.01}
+                      className="flex-1 bg-green-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-green-600 disabled:opacity-50">
+                      {saving ? "Saving..." : "✅ Record Payment"}
+                    </button>
+                  </div>
                 </div>
               )}
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Amount Received (₹) *</label>
-                  <input type="number" min="0.01" step="0.01" value={amount}
-                    onChange={(e) => setAmount(e.target.value)}
-                    placeholder="Enter amount received"
-                    className={inp} />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Note (optional)</label>
-                  <input value={note} onChange={(e) => setNote(e.target.value)}
-                    placeholder="e.g. Cash payment, UPI transfer..."
-                    className={inp} />
-                </div>
-                {amount && !isNaN(parseFloat(amount)) && (
-                  <div className="bg-gray-50 rounded-lg px-4 py-3 text-sm">
-                    New balance after payment: <span className={`font-bold ${Math.max(0, balance - parseFloat(amount)) > 0 ? "text-red-600" : "text-green-600"}`}>
-                      ₹{Math.max(0, balance - parseFloat(amount)).toFixed(2)}
-                    </span>
-                  </div>
-                )}
-                <div className="flex gap-3 pt-2">
-                  <button onClick={() => setTab("ledger")} className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm">Cancel</button>
-                  <button onClick={handlePayment} disabled={saving || !amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0}
-                    className="flex-1 bg-green-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-green-600 disabled:opacity-50">
-                    {saving ? "Saving..." : "✅ Record Payment"}
-                  </button>
-                </div>
-              </div>
             </div>
           )}
 
           {/* Adjustment tab */}
           {tab === "adjust" && isAdmin && (
             <div className="p-6">
-              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-5">
-                <p className="text-sm text-blue-700 font-medium">Use adjustments to correct errors or add charges not from orders.</p>
-                <p className="text-sm text-blue-600 mt-1">Positive amount = add to balance (debit). Negative amount = reduce balance (credit).</p>
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4">
+                <p className="text-sm text-blue-700 font-medium">Use adjustments to correct errors or add charges/credits.</p>
+                <p className="text-sm text-blue-600 mt-1">
+                  <span className="font-semibold">Positive</span> = adds to balance (customer owes more) &nbsp;|&nbsp;
+                  <span className="font-semibold">Negative</span> = reduces balance (credit)
+                </p>
               </div>
+
+              {/* Current balance */}
+              <div className="flex justify-between items-center bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 mb-4">
+                <span className="text-sm text-gray-600">Current Balance</span>
+                <span className={`font-bold text-lg ${balance > 0 ? "text-red-600" : "text-green-600"}`}>
+                  ₹{balance.toFixed(2)}
+                </span>
+              </div>
+
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Amount (₹) *</label>
                   <input type="number" step="0.01" value={amount}
                     onChange={(e) => setAmount(e.target.value)}
-                    placeholder="e.g. 200 or -200"
+                    placeholder="e.g. 200 (charge) or -200 (credit)"
                     className={inp} />
                 </div>
+
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Reason *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Reason * <span className="text-xs text-gray-400 font-normal">(required)</span>
+                  </label>
                   <input value={note} onChange={(e) => setNote(e.target.value)}
-                    placeholder="e.g. Damage charges, credit note..."
+                    placeholder="e.g. Damage charges, return credit, price correction..."
                     className={inp} />
+                  {!note.trim() && amount && (
+                    <p className="text-xs text-red-500 mt-1">⚠ Please enter a reason before applying</p>
+                  )}
                 </div>
-                {amount && !isNaN(parseFloat(amount)) && (
-                  <div className="bg-gray-50 rounded-lg px-4 py-3 text-sm">
-                    {parseFloat(amount) >= 0
-                      ? <span>Adding <span className="font-bold text-red-600">₹{parseFloat(amount).toFixed(2)}</span> to balance</span>
-                      : <span>Reducing balance by <span className="font-bold text-green-600">₹{Math.abs(parseFloat(amount)).toFixed(2)}</span></span>
-                    }
+
+                {/* Preview new balance */}
+                {amount && !isNaN(parseFloat(amount)) && parseFloat(amount) !== 0 && (
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-sm space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Current balance:</span>
+                      <span className="font-medium text-gray-700">₹{balance.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Adjustment:</span>
+                      <span className={`font-medium ${parseFloat(amount) >= 0 ? "text-red-600" : "text-green-600"}`}>
+                        {parseFloat(amount) >= 0 ? "+" : ""}₹{parseFloat(amount).toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between border-t border-gray-200 pt-1 mt-1">
+                      <span className="text-gray-600 font-medium">New balance:</span>
+                      <span className={`font-bold ${Math.max(0, balance + parseFloat(amount)) > 0 ? "text-red-600" : "text-green-600"}`}>
+                        ₹{Math.max(0, balance + parseFloat(amount)).toFixed(2)}
+                      </span>
+                    </div>
                   </div>
                 )}
+
                 <div className="flex gap-3 pt-2">
                   <button onClick={() => setTab("ledger")} className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm">Cancel</button>
-                  <button onClick={handleAdjustment} disabled={saving || !amount || isNaN(parseFloat(amount)) || parseFloat(amount) === 0 || !note.trim()}
+                  <button onClick={handleAdjustment}
+                    disabled={saving || !amount || isNaN(parseFloat(amount)) || parseFloat(amount) === 0 || !note.trim()}
                     className="flex-1 bg-blue-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-blue-600 disabled:opacity-50">
                     {saving ? "Saving..." : "Apply Adjustment"}
                   </button>

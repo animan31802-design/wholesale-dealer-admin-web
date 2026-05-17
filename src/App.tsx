@@ -21,6 +21,7 @@ import FinanceReports from "./pages/FinanceReports";
 import AgentReports from "./pages/AgentReports";
 import OrderReports from "./pages/OrderReports";
 import CustomerReports from "./pages/CustomerReports";
+import AgentCashCollection from "./pages/AgentCashCollection";
 import Layout from "./components/Layout";
 
 // ── Route guards ─────────────────────────────────────────────────
@@ -133,6 +134,9 @@ export default function App() {
 
           {/* Create order — admin only (admins place orders on behalf of field agents on web) */}
           <Route path="create-order"     element={<AdminRoute><CreateOrderPage /></AdminRoute>} />
+
+          {/* Agent Cash Collection — admin only */}
+          <Route path="agent-cash"       element={<AdminRoute><AgentCashCollection /></AdminRoute>} />
 
           {/* Reports — admin only */}
           <Route path="reports/salesrevenue"    element={<AdminRoute><SalesRevenueReports /></AdminRoute>} />

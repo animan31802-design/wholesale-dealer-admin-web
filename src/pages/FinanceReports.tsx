@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
+import Pagination from "../components/Pagination";
 import { collection, getDocs, orderBy, query } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Order } from "../types";
@@ -256,18 +257,31 @@ function GSTReport({ orders }: { orders: Order[] }) {
   const { from: df, to: dt } = thisMonthRange();
   const [from, setFrom] = useState(df);
   const [to,   setTo]   = useState(dt);
-  const [view, setView] = useState<"b2c" | "hsn" | "rate">("b2c");
+  const [view, setView] = useState<"b2c" | "rate" | "hsn" | "tax_invoice" | "bill_of_supply">("b2c");
+  const [b2cPage, setB2cPage] = useState(1);
+  const B2C_PER_PAGE = 25;
 
-  const filtered = useMemo(() => {
+  const { filteredGST, filteredEstimate } = useMemo(() => {
     const f = new Date(from); f.setHours(0,0,0,0);
     const t = new Date(to);   t.setHours(23,59,59,999);
-    return orders.filter(o =>
+
+    const inRange = (o: Order) =>
       o.status !== "cancelled" &&
-      o.invoiceType === "gst" &&
+      !!o.invoiceNumber &&
       new Date(o.createdAt) >= f &&
-      new Date(o.createdAt) <= t
-    );
+      new Date(o.createdAt) <= t;
+
+    // Split purely on the invoiceType the user chose at generation time.
+    // Tax Invoice (gst)     → used for IT/GST filing, shows CGST+SGST breakdown.
+    // Bill of Supply (estimate) → not submitted for IT filing, no tax breakdown shown.
+    const gst = orders.filter(o => inRange(o) && o.invoiceType === "gst");
+    const est = orders.filter(o => inRange(o) && o.invoiceType === "estimate");
+
+    return { filteredGST: gst, filteredEstimate: est };
   }, [orders, from, to]);
+
+  // "filtered" used by gstLines / rateWise / hsnWise — always GST orders only
+  const filtered = filteredGST;
 
   // Build per-order GST lines
   const gstLines: GSTLine[] = useMemo(() => filtered.map(o => {
@@ -415,20 +429,26 @@ function GSTReport({ orders }: { orders: Order[] }) {
         <DateRange from={from} to={to} setFrom={setFrom} setTo={setTo} />
       </div>
       <div className="flex flex-wrap gap-3 items-center">
-        <div className="flex gap-1">
-          {(["b2c", "rate", "hsn"] as const).map(v => (
-            <button key={v} onClick={() => setView(v)}
+        <div className="flex gap-1 flex-wrap">
+          {([
+            ["b2c",           "📄 Invoice-wise"],
+            ["rate",          "📊 Rate-wise"],
+            ["hsn",           "🔢 HSN-wise"],
+            ["tax_invoice",   "🧾 Tax Invoice"],
+            ["bill_of_supply","📋 Bill of Supply"],
+          ] as const).map(([v, label]) => (
+            <button key={v} onClick={() => { setView(v as any); setB2cPage(1); }}
               className={`px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
                 view === v ? "bg-orange-500 text-white border-orange-500" : "bg-white text-gray-500 border-gray-200"
               }`}>
-              {v === "b2c" ? "📄 Invoice-wise" : v === "rate" ? "📊 Rate-wise" : "🔢 HSN-wise"}
+              {label}
             </button>
           ))}
         </div>
         <ActionBar onPrint={handlePrint} onExport={handleExport} />
       </div>
 
-      {/* B2C View */}
+      {/* B2C / Invoice-wise View */}
       {view === "b2c" && (
         <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
           <table className="w-full text-sm">
@@ -446,7 +466,7 @@ function GSTReport({ orders }: { orders: Order[] }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {gstLines.map(l => (
+              {gstLines.slice((b2cPage - 1) * B2C_PER_PAGE, b2cPage * B2C_PER_PAGE).map(l => (
                 <tr key={l.orderId} className="hover:bg-gray-50">
                   <td className="px-4 py-3 font-mono text-xs text-blue-700">{l.invoiceNumber}</td>
                   <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">{fmtDate(l.date)}</td>
@@ -475,8 +495,159 @@ function GSTReport({ orders }: { orders: Order[] }) {
             </tfoot>
           </table>
           {gstLines.length === 0 && <div className="text-center py-12 text-gray-400">No GST invoices in this period.</div>}
+          {gstLines.length > B2C_PER_PAGE && (
+            <div className="px-4 py-3 border-t border-gray-100">
+              <Pagination total={gstLines.length} page={b2cPage} perPage={B2C_PER_PAGE} onPage={setB2cPage} />
+            </div>
+          )}
         </div>
       )}
+
+      {/* Tax Invoice View — GST registered customers only */}
+      {view === "tax_invoice" && (() => {
+        const lines = filteredGST.map(o => {
+          let taxableTotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0;
+          const ratesSet = new Set<string>();
+          const hsnSet   = new Set<string>();
+          o.items.forEach(item => {
+            const rate = parseGstRate(item.gst);
+            if (rate > 0) ratesSet.add(`${rate}%`);
+            if (item.hsn) hsnSet.add(item.hsn);
+            const { taxable, cgst, sgst, igst } = itemTaxBreakdown(item.price, item.quantity, rate, item.taxInclusive ?? false);
+            taxableTotal += taxable; cgstTotal += cgst; sgstTotal += sgst; igstTotal += igst;
+          });
+          return { o, taxableTotal, cgstTotal, sgstTotal, igstTotal, ratesSet, hsnSet };
+        });
+        const totTax  = lines.reduce((s, l) => s + l.cgstTotal + l.sgstTotal + l.igstTotal, 0);
+        const totGrand = lines.reduce((s, l) => s + l.o.totalAmount, 0);
+        const totTaxable = lines.reduce((s, l) => s + l.taxableTotal, 0);
+        return (
+          <div className="space-y-3">
+            <div className="flex gap-4 text-sm">
+              <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3">
+                <p className="text-xs text-gray-400">Tax Invoices</p>
+                <p className="text-xl font-bold text-blue-700">{lines.length}</p>
+              </div>
+              <div className="bg-orange-50 border border-orange-100 rounded-xl px-4 py-3">
+                <p className="text-xs text-gray-400">Total Taxable</p>
+                <p className="text-xl font-bold text-orange-700">{fmtINR(totTaxable)}</p>
+              </div>
+              <div className="bg-green-50 border border-green-100 rounded-xl px-4 py-3">
+                <p className="text-xs text-gray-400">Total GST</p>
+                <p className="text-xl font-bold text-green-700">{fmtINR(totTax)}</p>
+              </div>
+              <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3">
+                <p className="text-xs text-gray-400">Grand Total</p>
+                <p className="text-xl font-bold text-gray-800">{fmtINR(totGrand)}</p>
+              </div>
+            </div>
+            <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-blue-50 text-blue-400 text-xs uppercase tracking-wide">
+                  <tr>
+                    <th className="px-4 py-3 text-left">Invoice No.</th>
+                    <th className="px-4 py-3 text-left">Date</th>
+                    <th className="px-4 py-3 text-left">Customer</th>
+                    <th className="px-4 py-3 text-left">HSN</th>
+                    <th className="px-4 py-3 text-center">Rate</th>
+                    <th className="px-4 py-3 text-right">Taxable</th>
+                    <th className="px-4 py-3 text-right">CGST</th>
+                    <th className="px-4 py-3 text-right">SGST</th>
+                    <th className="px-4 py-3 text-right">Grand Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {lines.map(({ o, taxableTotal, cgstTotal, sgstTotal, ratesSet, hsnSet }) => (
+                    <tr key={o.id} className="hover:bg-blue-50/30">
+                      <td className="px-4 py-3 font-mono text-xs text-blue-700 font-semibold">{o.invoiceNumber}</td>
+                      <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">{fmtDate(o.createdAt)}</td>
+                      <td className="px-4 py-3 text-gray-800">{o.customerName}</td>
+                      <td className="px-4 py-3 text-gray-500 font-mono text-xs">{Array.from(hsnSet).join(", ") || "—"}</td>
+                      <td className="px-4 py-3 text-center">
+                        <span className="bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded-full">
+                          {Array.from(ratesSet).join(", ") || "0%"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right text-gray-700">{fmtINR(taxableTotal)}</td>
+                      <td className="px-4 py-3 text-right text-orange-600">{fmtINR(cgstTotal)}</td>
+                      <td className="px-4 py-3 text-right text-orange-600">{fmtINR(sgstTotal)}</td>
+                      <td className="px-4 py-3 text-right font-bold text-gray-900">{fmtINR(o.totalAmount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="bg-blue-50 border-t-2 border-blue-200 font-semibold">
+                  <tr>
+                    <td colSpan={5} className="px-4 py-3 text-gray-700">Total ({lines.length})</td>
+                    <td className="px-4 py-3 text-right">{fmtINR(totTaxable)}</td>
+                    <td className="px-4 py-3 text-right text-orange-600">{fmtINR(lines.reduce((s,l) => s+l.cgstTotal, 0))}</td>
+                    <td className="px-4 py-3 text-right text-orange-600">{fmtINR(lines.reduce((s,l) => s+l.sgstTotal, 0))}</td>
+                    <td className="px-4 py-3 text-right text-blue-700">{fmtINR(totGrand)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+              {lines.length === 0 && <div className="text-center py-12 text-gray-400">No Tax Invoices in this period.</div>}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Bill of Supply View — unregistered / exempt customers */}
+      {view === "bill_of_supply" && (() => {
+        const lines = filteredEstimate;
+        const totGrand = lines.reduce((s, o) => s + o.totalAmount, 0);
+        return (
+          <div className="space-y-3">
+            <div className="flex gap-4 text-sm">
+              <div className="bg-green-50 border border-green-100 rounded-xl px-4 py-3">
+                <p className="text-xs text-gray-400">Bill of Supply Count</p>
+                <p className="text-xl font-bold text-green-700">{lines.length}</p>
+              </div>
+              <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3">
+                <p className="text-xs text-gray-400">Total Value</p>
+                <p className="text-xl font-bold text-gray-800">{fmtINR(totGrand)}</p>
+              </div>
+            </div>
+            <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-green-50 text-green-500 text-xs uppercase tracking-wide">
+                  <tr>
+                    <th className="px-4 py-3 text-left">Bill No.</th>
+                    <th className="px-4 py-3 text-left">Date</th>
+                    <th className="px-4 py-3 text-left">Customer</th>
+                    <th className="px-4 py-3 text-left">Items</th>
+                    <th className="px-4 py-3 text-right">Total Amount</th>
+                    <th className="px-4 py-3 text-center">Payment</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {lines.map(o => (
+                    <tr key={o.id} className="hover:bg-green-50/20">
+                      <td className="px-4 py-3 font-mono text-xs text-green-700 font-semibold">{o.invoiceNumber}</td>
+                      <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">{fmtDate(o.createdAt)}</td>
+                      <td className="px-4 py-3 text-gray-800">{o.customerName}</td>
+                      <td className="px-4 py-3 text-gray-500 text-xs">{o.items.length} item{o.items.length !== 1 ? "s" : ""}</td>
+                      <td className="px-4 py-3 text-right font-bold text-gray-900">{fmtINR(o.totalAmount)}</td>
+                      <td className="px-4 py-3 text-center">
+                        <span className="bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded-full capitalize">
+                          {o.paymentMode || "—"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="bg-green-50 border-t-2 border-green-200 font-semibold">
+                  <tr>
+                    <td colSpan={4} className="px-4 py-3 text-gray-700">Total ({lines.length})</td>
+                    <td className="px-4 py-3 text-right text-green-700">{fmtINR(totGrand)}</td>
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
+              {lines.length === 0 && <div className="text-center py-12 text-gray-400">No Bills of Supply in this period.</div>}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Rate-wise View */}
       {view === "rate" && (
@@ -552,6 +723,66 @@ function GSTReport({ orders }: { orders: Order[] }) {
           {hsnWise.length === 0 && <div className="text-center py-12 text-gray-400">No HSN data found.</div>}
         </div>
       )}
+
+      {/* Voided / Cancelled Invoices — always shown in B2C view for GST compliance */}
+      {view === "b2c" && (() => {
+        // Collect all voided invoice entries from orders in the period
+        const f = new Date(from); f.setHours(0,0,0,0);
+        const t = new Date(to);   t.setHours(23,59,59,999);
+        const voidedRows: Array<{
+          invoiceNumber: string; voidedAt: string; orderId: string;
+          customerName: string; grandTotal: number; reason?: string;
+        }> = [];
+        orders
+          .filter(o => new Date(o.createdAt) >= f && new Date(o.createdAt) <= t)
+          .forEach(o => {
+            ((o as any).voidedInvoices ?? []).forEach((v: any) => {
+              voidedRows.push({
+                invoiceNumber: v.invoiceNumber,
+                voidedAt:      v.voidedAt,
+                orderId:       o.id!,
+                customerName:  o.customerName,
+                grandTotal:    o.totalAmount,
+                reason:        v.reason,
+              });
+            });
+          });
+
+        if (voidedRows.length === 0) return null;
+
+        return (
+          <div>
+            <h4 className="text-sm font-semibold text-red-600 mb-2 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-red-400 inline-block" />
+              Cancelled / Voided Invoices — must be reported in GSTR-1
+            </h4>
+            <div className="bg-white rounded-xl shadow-sm overflow-x-auto border border-red-100">
+              <table className="w-full text-sm">
+                <thead className="bg-red-50 text-red-400 text-xs uppercase tracking-wide">
+                  <tr>
+                    <th className="px-4 py-3 text-left">Voided Invoice No.</th>
+                    <th className="px-4 py-3 text-left">Voided On</th>
+                    <th className="px-4 py-3 text-left">Customer</th>
+                    <th className="px-4 py-3 text-right">Original Amount</th>
+                    <th className="px-4 py-3 text-left">Reason</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-red-50">
+                  {voidedRows.map((v, i) => (
+                    <tr key={i} className="bg-red-50/30">
+                      <td className="px-4 py-3 font-mono text-xs text-red-700 line-through">{v.invoiceNumber}</td>
+                      <td className="px-4 py-3 text-gray-500 text-xs">{fmtDate(v.voidedAt)}</td>
+                      <td className="px-4 py-3 text-gray-700">{v.customerName}</td>
+                      <td className="px-4 py-3 text-right text-gray-600">{fmtINR(v.grandTotal)}</td>
+                      <td className="px-4 py-3 text-gray-400 text-xs">{v.reason || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

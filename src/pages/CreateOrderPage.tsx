@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   collection, getDocs, addDoc, query, orderBy,
-  doc, runTransaction, onSnapshot,
+  doc, runTransaction, onSnapshot, setDoc, getDoc, increment,
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Customer, Product, Order, OrderItem } from "../types";
@@ -761,11 +761,74 @@ export default function CreateOrderPage() {
         const liveDue = customerSnap.exists() ? (customerSnap.data().outstandingDue ?? 0) : prevBalance;
         const newDue  = round2(liveDue + grandTotal - paid);
         t.update(customerRef, { outstandingDue: newDue });
+
+        // Write ledger entries atomically with the order
+        const ledgerCol = collection(db, "customers", customer.id!, "payments");
+
+        // Debit: order placed (increases what customer owes)
+        t.set(doc(ledgerCol), {
+          type:          "order_placed",
+          direction:     "debit",
+          amount:        round2(grandTotal),
+          orderId:       newOrderId,
+          orderAmount:   round2(grandTotal),
+          note:          "Order #" + newOrderId.slice(0, 8).toUpperCase() + " placed",
+          createdBy:     user.uid,
+          createdByName: user.name,
+          createdAt:     new Date().toISOString(),
+        });
+
+        // Credit: advance paid at order creation (reduces what customer owes)
+        if (paid > 0) {
+          t.set(doc(ledgerCol), {
+            type:          "delivery_payment",
+            direction:     "credit",
+            amount:        round2(paid),
+            orderId:       newOrderId,
+            note:          "Advance collected at order #" + newOrderId.slice(0, 8).toUpperCase() + " (" + paymentMode + ")",
+            createdBy:     user.uid,
+            createdByName: user.name,
+            createdAt:     new Date().toISOString(),
+          });
+        }
       });
 
       // Success
       delete draftStore[customer.id!];
       setLastOrderId(newOrderId);
+
+      // ── Sync field agent cash ledger if advance was collected ──
+      if (paid > 0 && user) {
+        try {
+          const cashRef = doc(db, "agentCashLedger", user.uid);
+          await runTransaction(db, async (t) => {
+            const snap = await t.get(cashRef);
+            const current = snap.exists() ? (snap.data().cashInHand ?? 0) : 0;
+            t.set(cashRef, {
+              agentId: user.uid,
+              agentName: user.name,
+              agentRole: user.role,
+              cashInHand: round2(current + paid),
+            }, { merge: true });
+            const entryRef = doc(collection(db, "agentCashLedger", user.uid, "entries"));
+            t.set(entryRef, {
+              agentId: user.uid,
+              agentName: user.name,
+              type: "order_advance",
+              orderId: newOrderId,
+              amount: paid,
+              direction: "in",
+              note: `Advance collected for order #${newOrderId.slice(0, 8).toUpperCase()} (${customer.shopName})`,
+              createdBy: user.uid,
+              createdByName: user.name,
+              createdAt: new Date().toISOString(),
+            });
+          });
+        } catch (e) {
+          // Non-critical — don't block the order success
+          console.warn("Cash ledger sync failed:", e);
+        }
+      }
 
       // ── WhatsApp notification if customer has a phone number ──
       if (customer.phone) {

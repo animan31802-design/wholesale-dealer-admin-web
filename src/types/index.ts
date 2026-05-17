@@ -118,6 +118,9 @@ export interface Order {
   notes?: string;
   invoiceNumber?: string;
   invoiceType?: InvoiceType;
+  invoicedAt?: string;
+  billingMode?: BillingMode;
+  voidedInvoices?: Array<{ invoiceNumber: string; voidedAt: string; voidedBy: string; voidedByName: string }>;
   signatureUrl?: string;
   signature?: string;
   amountCollected?: number;

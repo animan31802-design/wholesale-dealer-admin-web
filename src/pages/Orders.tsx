@@ -542,8 +542,12 @@ export default function Orders() {
                       </button>
                     )}
                     <button onClick={() => setInvoiceOrder(order)}
-                      className="bg-orange-500 text-white text-xs px-3 py-1.5 rounded-lg hover:bg-orange-600">
-                      🧾 Invoice
+                      className={`text-xs px-3 py-1.5 rounded-lg font-medium ${
+                        order.invoiceNumber
+                          ? "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                          : "bg-orange-500 text-white hover:bg-orange-600"
+                      }`}>
+                      {order.invoiceNumber ? "👁 View Invoice" : "🧾 Generate Invoice"}
                     </button>
                   </div>
                 </td>
@@ -598,7 +602,7 @@ export default function Orders() {
         />
       )}
       {invoiceOrder && (
-        <InvoiceModal order={invoiceOrder} onClose={() => setInvoiceOrder(null)} />
+        <InvoiceModal order={invoiceOrder} onClose={() => setInvoiceOrder(null)} isAdmin={user?.role === "admin"} />
       )}
       {selectedOrder && (
         <AssignDeliveryModal order={selectedOrder} deliveryUsers={deliveryUsers}
@@ -609,17 +613,36 @@ export default function Orders() {
   );
 }
 
-// ── Invoice Modal — preview in browser, option to download ───────
-function InvoiceModal({ order, onClose }: { order: Order; onClose: () => void }) {
-  const [invoiceType, setInvoiceType] = useState<InvoiceType>("estimate");
-  const [billingMode, setBillingMode] = useState<BillingMode>("without_due");
-  const [customerDue, setCustomerDue]     = useState("");
-  const [customerData, setCustomerData]   = useState<any>(null);
-  const [pdfUrl, setPdfUrl]               = useState<string | null>(null);
-  const [loadingDue, setLoadingDue]       = useState(false);
-  const [generating, setGenerating]       = useState(false);
+// ── Invoice Modal ──────────────────────────────────────────────────
+// States:
+//   "setup"      — order has no invoice yet; user chooses type + due, then generates
+//   "view"       — order already has an invoice; PDF renders immediately
+//   "regenerate" — admin-only confirmation before voiding old number + minting new
+//   "preview"    — PDF is ready to view / download / share
+function InvoiceModal({ order, onClose, isAdmin }: {
+  order: Order; onClose: () => void; isAdmin: boolean;
+}) {
+  const hasInvoice = !!order.invoiceNumber;
 
-  // Auto-load customer data (GSTIN, outstanding due)
+  // UI state machine
+  type ModalState = "setup" | "view" | "regenerate" | "preview";
+  const [modalState, setModalState] = useState<ModalState>(hasInvoice ? "view" : "setup");
+
+  // Invoice options — pre-filled from saved data if already invoiced
+  const [invoiceType, setInvoiceType] = useState<InvoiceType>(order.invoiceType ?? "estimate");
+  const [billingMode, setBillingMode] = useState<BillingMode>(order.billingMode ?? "without_due");
+  const [customerDue, setCustomerDue] = useState("");
+
+  // Working invoice number — locked once minted, never changes except on regen
+  const [invoiceNumber, setInvoiceNumber] = useState<string>(order.invoiceNumber || "");
+
+  const [customerData, setCustomerData] = useState<any>(null);
+  const [pdfUrl, setPdfUrl]             = useState<string | null>(null);
+  const [loadingDue, setLoadingDue]     = useState(false);
+  const [generating, setGenerating]     = useState(false);
+  const [regenReason, setRegenReason]   = useState("");
+
+  // Load customer data once
   useEffect(() => {
     if (!order.customerId) return;
     setLoadingDue(true);
@@ -627,193 +650,389 @@ function InvoiceModal({ order, onClose }: { order: Order; onClose: () => void })
       if (snap.exists()) {
         const data = snap.data();
         setCustomerData(data);
-
-        // ── Derive the TRUE historical due (before this order) ────────────
-        // customer.outstandingDue is updated at order creation:
-        //   newDue = prevDue + orderTotal − advancePaid
-        // So to get prevDue back:
-        //   prevDue = outstandingDue − balanceDue
-        // where balanceDue is stored on the order itself.
-        const currentDue   = data.outstandingDue ?? 0;
-        const orderBalance = (order as any).balanceDue ?? 0;   // saved on the order doc
-        const historicalDue = Math.max(0, Math.round((currentDue - orderBalance) * 100) / 100);
-
-        if (historicalDue > 0) {
-          setCustomerDue(String(historicalDue));
-          setBillingMode("with_due");
+        if (!hasInvoice) {
+          // Only auto-compute due on first-time generation
+          const currentDue    = data.outstandingDue ?? 0;
+          const orderBalance  = (order as any).balanceDue ?? 0;
+          const historicalDue = Math.max(0, Math.round((currentDue - orderBalance) * 100) / 100);
+          if (historicalDue > 0) {
+            setCustomerDue(String(historicalDue));
+            setBillingMode("with_due");
+          }
         }
       }
       setLoadingDue(false);
     }).catch(() => setLoadingDue(false));
   }, [order.customerId]);
 
-  // Revoke object URL on unmount
+  // Revoke blob URL on unmount
   useEffect(() => {
     return () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl); };
   }, [pdfUrl]);
 
-  const handlePreview = async () => {
+  // Auto-render PDF when entering "view" state (existing invoice)
+  useEffect(() => {
+    if (modalState === "view" && !pdfUrl && !generating) {
+      // Defer past React's commit phase so it doesn't compete with rendering
+      const t = setTimeout(() => {
+        renderPdf(order.invoiceNumber!, order.invoiceType ?? "estimate", order.billingMode ?? "without_due");
+      }, 50);
+      return () => clearTimeout(t);
+    }
+  }, [modalState]);
+
+  // ── Core render — NEVER touches the invoice counter ──────────────
+  const renderPdf = async (
+    invNum: string,
+    invType: InvoiceType,
+    billMode: BillingMode,
+  ) => {
     setGenerating(true);
     if (pdfUrl) URL.revokeObjectURL(pdfUrl);
-    const pdf = await buildInvoicePDF(order, customerData || undefined, {
-      invoiceType,
-      billingMode,
-      customerDue: billingMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
-    });
-    const blob = pdf.output("blob");
-    setPdfUrl(URL.createObjectURL(blob));
-    setGenerating(false);
+    try {
+      const orderWithMeta = { ...order, invoiceNumber: invNum, invoiceType: invType, billingMode: billMode };
+      const pdf = await buildInvoicePDF(orderWithMeta as any, customerData || undefined, {
+        invoiceType: invType,
+        billingMode: billMode,
+        customerDue: billMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
+      });
+      setPdfUrl(URL.createObjectURL(pdf.output("blob")));
+      setModalState("preview");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  // ── GENERATE (first time) ─────────────────────────────────────────
+  // Mint number → save to Firestore → render PDF. Counter increments exactly once.
+  const handleGenerate = async () => {
+    setGenerating(true);
+    try {
+      // 1. Fetch business settings to get prefix
+      const bizSnap = await getDoc(doc(db, "settings", "business"));
+      const prefix  = bizSnap.exists() ? (bizSnap.data().invoicePrefix || "INV") : "INV";
+
+      // 2. Mint invoice number atomically (counter increments here, exactly once)
+      const { mintInvoiceNumber } = await import("../utils/invoice");
+      const minted = await mintInvoiceNumber(prefix);
+
+      // 3. Persist everything to the order doc BEFORE rendering
+      await updateDoc(doc(db, "orders", order.id!), {
+        invoiceNumber: minted,
+        invoiceType,
+        billingMode,
+        invoicedAt: new Date().toISOString(),
+      });
+
+      setInvoiceNumber(minted);
+
+      // 4. Render PDF with the locked number
+      await renderPdf(minted, invoiceType, billingMode);
+    } catch (e: any) {
+      alert("Failed to generate invoice: " + e.message);
+      setGenerating(false);
+    }
+  };
+
+  // ── REGENERATE (admin only) ───────────────────────────────────────
+  // Void old number (save to voidedInvoices[]) → mint new → save → render.
+  const handleRegenerate = async () => {
+    if (!regenReason.trim()) return;
+    setGenerating(true);
+    try {
+      const { user: authUser } = useAuthStore.getState();
+
+      const bizSnap = await getDoc(doc(db, "settings", "business"));
+      const prefix  = bizSnap.exists() ? (bizSnap.data().invoicePrefix || "INV") : "INV";
+
+      const { mintInvoiceNumber } = await import("../utils/invoice");
+      const minted = await mintInvoiceNumber(prefix);
+
+      // Record the voided invoice
+      const voidedEntry = {
+        invoiceNumber: order.invoiceNumber!,
+        voidedAt:      new Date().toISOString(),
+        voidedBy:      authUser!.uid,
+        voidedByName:  authUser!.name,
+        reason:        regenReason.trim(),
+      };
+      const existingVoided = (order as any).voidedInvoices ?? [];
+
+      await updateDoc(doc(db, "orders", order.id!), {
+        invoiceNumber:   minted,
+        invoiceType,
+        billingMode,
+        invoicedAt:      new Date().toISOString(),
+        voidedInvoices:  [...existingVoided, voidedEntry],
+      });
+
+      setInvoiceNumber(minted);
+      setRegenReason("");
+      await renderPdf(minted, invoiceType, billingMode);
+    } catch (e: any) {
+      alert("Failed to regenerate invoice: " + e.message);
+      setGenerating(false);
+    }
   };
 
   const handleDownload = async () => {
-    const pdf = await buildInvoicePDF(order, customerData || undefined, {
+    const prefix = invoiceType === "gst" ? "invoice" : "estimate";
+    const orderWithMeta = { ...order, invoiceNumber, invoiceType, billingMode };
+    const pdf = await buildInvoicePDF(orderWithMeta as any, customerData || undefined, {
       invoiceType,
       billingMode,
       customerDue: billingMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
     });
-    const prefix = invoiceType === "gst" ? "invoice" : "estimate";
-    pdf.save(`${prefix}-${order.id?.slice(0, 8)}.pdf`);
+    pdf.save(`${prefix}-${invoiceNumber}.pdf`);
   };
 
-  // Reset preview when options change
-  useEffect(() => { setPdfUrl(null); }, [invoiceType, billingMode, customerDue]);
+  const handleShare = async () => {
+    try {
+      const prefix = invoiceType === "gst" ? "invoice" : "estimate";
+      const orderWithMeta = { ...order, invoiceNumber, invoiceType, billingMode };
+      const pdf = await buildInvoicePDF(orderWithMeta as any, customerData || undefined, {
+        invoiceType,
+        billingMode,
+        customerDue: billingMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
+      });
+      const blob = pdf.output("blob");
+      const file = new File([blob], `${prefix}-${invoiceNumber}.pdf`, { type: "application/pdf" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: `Invoice - ${order.customerName}`, text: `Invoice ₹${order.totalAmount.toFixed(2)}` });
+      } else {
+        const rawPhone = (order.customerPhone || "").replace(/[^\d]/g, "");
+        const phone10  = rawPhone.slice(-10);
+        if (phone10.length < 10) { alert("No valid phone for this customer."); return; }
+        const msg = encodeURIComponent(`Dear ${order.customerName},\nYour invoice for ₹${order.totalAmount.toFixed(2)} is ready.\nInvoice No: ${invoiceNumber}\nThank you!`);
+        window.open(`https://wa.me/91${phone10}?text=${msg}`, "_blank");
+      }
+    } catch (err: any) {
+      if (err.name !== "AbortError") alert("Could not share: " + err.message);
+    }
+  };
+
+  const isWide = modalState === "preview";
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className={`bg-white rounded-2xl shadow-2xl flex flex-col transition-all ${pdfUrl ? "w-full max-w-4xl h-[90vh]" : "w-full max-w-md"}`}>
+      {/* Modal is ALWAYS full size — never resizes, preventing page reflow glitch */}
+      <div className="relative bg-white rounded-2xl shadow-2xl flex flex-col w-full max-w-4xl h-[90vh]">
 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
           <div>
-            <h3 className="text-lg font-semibold text-gray-800">Invoice</h3>
-            <p className="text-sm text-gray-500">{order.customerName} · ₹{order.totalAmount.toFixed(2)}</p>
+            <h3 className="text-lg font-semibold text-gray-800">
+              {modalState === "setup" ? "Generate Invoice" :
+               modalState === "regenerate" ? "Regenerate Invoice" : "Invoice"}
+            </h3>
+            <p className="text-sm text-gray-500 flex items-center gap-2 flex-wrap">
+              <span>{order.customerName} · ₹{order.totalAmount.toFixed(2)}</span>
+              {invoiceNumber && (
+                <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-mono font-semibold">
+                  #{invoiceNumber}
+                </span>
+              )}
+              {invoiceType === "gst" && invoiceNumber && (
+                <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">Tax Invoice</span>
+              )}
+            </p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl p-1">✕</button>
         </div>
 
-        {/* Options — hidden when preview is showing */}
-        {!pdfUrl && (
-          <div className="p-6 space-y-4">
-            {/* Invoice type */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Invoice Type</label>
-              <div className="grid grid-cols-2 gap-3">
-                {(["gst", "estimate"] as InvoiceType[]).map((t) => (
-                  <button key={t} onClick={() => setInvoiceType(t)}
-                    className={`p-3 rounded-xl border-2 text-left transition-all ${
-                      invoiceType === t ? "border-orange-500 bg-orange-50" : "border-gray-200 hover:border-gray-300"
-                    }`}>
-                    <p className="font-semibold text-sm">{t === "gst" ? "🧾 Tax Invoice" : "📄 Estimate Bill"}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">{t === "gst" ? "CGST + SGST breakdown" : "No GST, simple format"}</p>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Billing mode */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Outstanding Due</label>
-              <div className="grid grid-cols-2 gap-3">
-                {(["without_due", "with_due"] as BillingMode[]).map((m) => (
-                  <button key={m} onClick={() => setBillingMode(m)}
-                    className={`p-3 rounded-xl border-2 text-left transition-all ${
-                      billingMode === m ? "border-orange-500 bg-orange-50" : "border-gray-200 hover:border-gray-300"
-                    }`}>
-                    <p className="font-semibold text-sm">{m === "without_due" ? "Current bill only" : "Show with due"}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">{m === "without_due" ? "Due tracked internally" : "Grand total on bill"}</p>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {billingMode === "with_due" && (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Previous Outstanding before this order (₹)
-                  {loadingDue && <span className="text-xs text-gray-400 ml-2">calculating…</span>}
-                </label>
-                <input type="number" min="0" step="0.01"
-                  value={customerDue} onChange={(e) => setCustomerDue(e.target.value)}
-                  placeholder="0.00"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
-                <p className="text-xs text-gray-400 mt-1">
-                  This is the amount the customer owed <em>before</em> this order — not the current balance.
-                </p>
-              </div>
-            )}
-
-            <div className="flex gap-3 pt-2">
-              <button onClick={onClose}
-                className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm hover:bg-gray-50">
-                Cancel
-              </button>
-              <button onClick={handlePreview} disabled={generating}
-                className="flex-1 bg-orange-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-orange-600 disabled:opacity-50">
-                {generating ? "Generating..." : "👁️ Preview Invoice"}
-              </button>
+        {/* ── GENERATING OVERLAY — shown during PDF render ── */}
+        {generating && (
+          <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center rounded-2xl z-10">
+            <div className="flex flex-col items-center gap-4">
+              <div className="w-12 h-12 border-4 border-orange-200 border-t-orange-500 rounded-full animate-spin" />
+              <p className="text-sm font-medium text-gray-600">Building invoice…</p>
+              <p className="text-xs text-gray-400">This takes a few seconds</p>
             </div>
           </div>
         )}
 
-        {/* PDF Preview */}
-        {pdfUrl && (
+        {/* ── SETUP STATE — first-time generation ── */}
+        {modalState === "setup" && (
+          <div className="flex-1 overflow-y-auto flex items-start justify-center">
+            <div className="w-full max-w-md p-6 space-y-5">
+              <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-700">
+                ⚠️ Choose carefully — once generated, the invoice number is <strong>permanently locked</strong> to this order. Only admins can regenerate with a new number.
+              </div>
+
+              {/* Invoice type */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Invoice Type *</label>
+                <div className="grid grid-cols-2 gap-3">
+                  {(["gst", "estimate"] as InvoiceType[]).map((t) => (
+                    <button key={t} onClick={() => setInvoiceType(t)}
+                      className={`p-3 rounded-xl border-2 text-left transition-all ${
+                        invoiceType === t ? "border-orange-500 bg-orange-50" : "border-gray-200 hover:border-gray-300"
+                      }`}>
+                      <p className="font-semibold text-sm">{t === "gst" ? "🧾 Tax Invoice" : "📄 Bill of Supply"}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{t === "gst" ? "CGST + SGST, for GST filing" : "No GST breakdown, not for IT filing"}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Billing mode */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Outstanding Due on Bill</label>
+                <div className="grid grid-cols-2 gap-3">
+                  {(["without_due", "with_due"] as BillingMode[]).map((m) => (
+                    <button key={m} onClick={() => setBillingMode(m)}
+                      className={`p-3 rounded-xl border-2 text-left transition-all ${
+                        billingMode === m ? "border-orange-500 bg-orange-50" : "border-gray-200 hover:border-gray-300"
+                      }`}>
+                      <p className="font-semibold text-sm">{m === "without_due" ? "Current bill only" : "Include previous due"}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{m === "without_due" ? "Due tracked internally" : "Shows grand total on bill"}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {billingMode === "with_due" && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Previous Outstanding before this order (₹)
+                    {loadingDue && <span className="text-xs text-gray-400 ml-2">calculating…</span>}
+                  </label>
+                  <input type="number" min="0" step="0.01" value={customerDue}
+                    onChange={(e) => setCustomerDue(e.target.value)} placeholder="0.00"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-1">
+                <button onClick={onClose}
+                  className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm hover:bg-gray-50">
+                  Cancel
+                </button>
+                <button onClick={handleGenerate} disabled={generating}
+                  className="flex-1 bg-orange-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-orange-600 disabled:opacity-50">
+                  {generating ? "Generating…" : "🧾 Generate Invoice"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── VIEW STATE — loading existing invoice ── */}
+        {modalState === "view" && (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center text-gray-400">
+              <div className="text-3xl mb-3 animate-spin">⏳</div>
+              <p className="text-sm">Loading invoice #{invoiceNumber}…</p>
+            </div>
+          </div>
+        )}
+
+        {/* ── REGENERATE STATE — admin confirmation ── */}
+        {modalState === "regenerate" && (
+          <div className="flex-1 overflow-y-auto flex items-start justify-center">
+            <div className="w-full max-w-md p-6 space-y-4">
+              <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-4 text-sm text-red-700 space-y-1">
+                <p className="font-semibold">⚠️ This will void the current invoice</p>
+                <p>Invoice <span className="font-mono font-bold">#{order.invoiceNumber}</span> will be marked as cancelled in the GST report.</p>
+                <p>A new invoice number will be permanently assigned to this order.</p>
+              </div>
+
+              {/* Invoice type */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">New Invoice Type</label>
+                <div className="grid grid-cols-2 gap-3">
+                  {(["gst", "estimate"] as InvoiceType[]).map((t) => (
+                    <button key={t} onClick={() => setInvoiceType(t)}
+                      className={`p-3 rounded-xl border-2 text-left transition-all ${
+                        invoiceType === t ? "border-orange-500 bg-orange-50" : "border-gray-200 hover:border-gray-300"
+                      }`}>
+                      <p className="font-semibold text-sm">{t === "gst" ? "🧾 Tax Invoice" : "📄 Bill of Supply"}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{t === "gst" ? "CGST + SGST, for GST filing" : "No GST breakdown"}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Billing mode */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Outstanding Due on Bill</label>
+                <div className="grid grid-cols-2 gap-3">
+                  {(["without_due", "with_due"] as BillingMode[]).map((m) => (
+                    <button key={m} onClick={() => setBillingMode(m)}
+                      className={`p-3 rounded-xl border-2 text-left transition-all ${
+                        billingMode === m ? "border-orange-500 bg-orange-50" : "border-gray-200 hover:border-gray-300"
+                      }`}>
+                      <p className="font-semibold text-sm">{m === "without_due" ? "Current bill only" : "Include previous due"}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{m === "without_due" ? "Due tracked internally" : "Shows grand total on bill"}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {billingMode === "with_due" && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Previous Outstanding (₹)</label>
+                  <input type="number" min="0" step="0.01" value={customerDue}
+                    onChange={(e) => setCustomerDue(e.target.value)} placeholder="0.00"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
+                </div>
+              )}
+
+              {/* Reason */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Reason for regeneration *</label>
+                <input value={regenReason} onChange={(e) => setRegenReason(e.target.value)}
+                  placeholder="e.g. Wrong customer details, GST number correction…"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-300" />
+              </div>
+
+              {(order as any).voidedInvoices?.length > 0 && (
+                <div className="bg-gray-50 rounded-lg px-4 py-3 text-xs text-gray-500">
+                  Previously voided: {(order as any).voidedInvoices.map((v: any) => (
+                    <span key={v.invoiceNumber} className="font-mono mr-2 line-through text-red-400">#{v.invoiceNumber}</span>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-1">
+                <button onClick={() => setModalState("preview")}
+                  className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm hover:bg-gray-50">
+                  ← Cancel
+                </button>
+                <button onClick={handleRegenerate} disabled={generating || !regenReason.trim()}
+                  className="flex-1 bg-red-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-red-600 disabled:opacity-50">
+                  {generating ? "Regenerating…" : "🔄 Void & Regenerate"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── PREVIEW STATE — PDF ready ── */}
+        {modalState === "preview" && pdfUrl && (
           <>
             <div className="flex-1 overflow-hidden">
               <iframe src={pdfUrl} className="w-full h-full border-0" title="Invoice Preview" />
             </div>
             <div className="flex gap-2 p-4 border-t border-gray-100 flex-shrink-0 flex-wrap">
-              <button onClick={() => setPdfUrl(null)}
+              <button onClick={onClose}
                 className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm hover:bg-gray-50">
-                ← Back
+                Close
               </button>
               <button onClick={handleDownload}
                 className="flex-1 bg-orange-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-orange-600">
                 ⬇️ Download
               </button>
-              <button
-                onClick={async () => {
-                  try {
-                    // Build the PDF blob
-                    const pdfDoc = await buildInvoicePDF(order, customerData || undefined, {
-                      invoiceType,
-                      billingMode,
-                      customerDue: billingMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
-                    });
-                    const blob = pdfDoc.output("blob");
-                    const prefix = invoiceType === "gst" ? "invoice" : "estimate";
-                    const fileName = `${prefix}-${order.id?.slice(0,8)}.pdf`;
-                    const file = new File([blob], fileName, { type: "application/pdf" });
-
-                    // Try native share (mobile/supported browsers) — shares actual PDF
-                    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-                      await navigator.share({
-                        files: [file],
-                        title: `Invoice - ${order.customerName}`,
-                        text: `Invoice for ₹${order.totalAmount.toFixed(2)}`,
-                      });
-                    } else {
-                      // Fallback: open WhatsApp with text message (desktop)
-                      // FIX (LOW): Validate phone before opening WhatsApp
-                      const rawPhone = (order.customerPhone || "").replace(/[^\d]/g, "");
-                      const phone10  = rawPhone.slice(-10);
-                      if (phone10.length < 10) {
-                        alert("No valid phone number on record for this customer. Cannot open WhatsApp.");
-                      } else {
-                        const msg = encodeURIComponent(
-                          `Dear ${order.customerName},\nYour invoice for ₹${order.totalAmount.toFixed(2)} is ready. Please download it from the link shared separately.\nThank you!`
-                        );
-                        const wa = `https://wa.me/91${phone10}?text=${msg}`;
-                        window.open(wa, "_blank");
-                      }
-                    }
-                  } catch (err: any) {
-                    if (err.name !== "AbortError") alert("Could not share: " + err.message);
-                  }
-                }}
-                className="flex-1 bg-green-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-green-600"
-              >
-                📱 WhatsApp
+              <button onClick={handleShare}
+                className="flex-1 bg-green-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-green-600">
+                📱 Share
               </button>
+              {isAdmin && (
+                <button onClick={() => setModalState("regenerate")}
+                  className="w-full border border-red-200 text-red-600 py-2 rounded-xl text-xs hover:bg-red-50 mt-1">
+                  🔄 Regenerate Invoice (Admin)
+                </button>
+              )}
             </div>
           </>
         )}
@@ -1049,10 +1268,33 @@ export function OrderDetailPanel({
                 <span className="text-gray-500">Order Total</span>
                 <span className="font-bold text-gray-800">₹{order.totalAmount.toFixed(2)}</span>
               </div>
-              {order.amountCollected !== undefined && (
+              {/* Advance paid by field agent at order creation */}
+              {(order as any).advancePaid > 0 && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Collected at Delivery</span>
-                  <span className="font-medium text-green-600">₹{order.amountCollected.toFixed(2)}</span>
+                  <span className="text-blue-600 font-medium">
+                    💼 Advance (Field Agent)
+                  </span>
+                  <span className="font-medium text-blue-600">₹{((order as any).advancePaid as number).toFixed(2)}</span>
+                </div>
+              )}
+              {/* Amount collected by delivery agent — only if different from advance */}
+              {order.amountCollected !== undefined &&
+                order.status === "delivered" &&
+                order.amountCollected !== (order as any).advancePaid && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-green-600 font-medium">
+                    🚚 Collected at Delivery
+                  </span>
+                  <span className="font-medium text-green-600">
+                    ₹{(order.amountCollected - ((order as any).advancePaid ?? 0)).toFixed(2)}
+                  </span>
+                </div>
+              )}
+              {/* Total collected so far (if any payment made) */}
+              {order.amountCollected !== undefined && order.amountCollected > 0 && (
+                <div className="flex justify-between text-sm border-t border-gray-100 pt-1.5">
+                  <span className="text-gray-500">Total Collected</span>
+                  <span className="font-semibold text-gray-700">₹{order.amountCollected.toFixed(2)}</span>
                 </div>
               )}
               {balance !== null && balance > 0 && (
@@ -1182,9 +1424,13 @@ export function OrderDetailPanel({
             )}
             <button
               onClick={() => onInvoice(order)}
-              className="flex-1 bg-orange-500 text-white py-2.5 rounded-xl text-sm font-medium hover:bg-orange-600"
+              className={`flex-1 py-2.5 rounded-xl text-sm font-medium ${
+                order.invoiceNumber
+                  ? "bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-200"
+                  : "bg-orange-500 text-white hover:bg-orange-600"
+              }`}
             >
-              🧾 Invoice
+              {order.invoiceNumber ? "👁 View Invoice" : "🧾 Generate Invoice"}
             </button>
           </div>
         </div>
@@ -1216,7 +1462,11 @@ function CancelOrderModal({
         const productRefs = order.items.map((item) =>
           doc(db, "products", item.productId)
         );
-        const productSnaps = await Promise.all(productRefs.map((ref) => t.get(ref)));
+        const customerRef  = doc(db, "customers", order.customerId);
+        const [productSnaps, customerSnap] = await Promise.all([
+          Promise.all(productRefs.map((ref) => t.get(ref))),
+          t.get(customerRef),
+        ]);
 
         // ── WRITES AFTER ALL READS ────────────────────────────────
         productSnaps.forEach((snap, i) => {
@@ -1245,6 +1495,31 @@ function CancelOrderModal({
           cancelledByName:    user!.name,
           cancellationReason: reason.trim(),
         });
+
+        // ── Reverse the order's effect on customer outstanding due ─
+        // The order debit = totalAmount, credit = advancePaid (already collected).
+        // On cancel we credit back the net (totalAmount - advancePaid) = balanceDue
+        // since the advance was already physically collected and doesn't change.
+        const advance     = (order as any).advancePaid ?? 0;
+        const netDebit    = Math.max(0, order.totalAmount - advance); // the remaining uncollected part
+        if (netDebit > 0 && customerSnap.exists()) {
+          const currentDue = customerSnap.data().outstandingDue ?? 0;
+          const newDue     = Math.max(0, Math.round((currentDue - netDebit) * 100) / 100);
+          t.update(customerRef, { outstandingDue: newDue });
+
+          // Ledger credit entry for the cancelled order's net balance
+          const ledgerEntryRef = doc(collection(db, "customers", order.customerId, "payments"));
+          t.set(ledgerEntryRef, {
+            type:          "order_cancelled",
+            direction:     "credit",
+            amount:        netDebit,
+            orderId:       order.id,
+            note:          `Order #${(order.id ?? "").slice(0, 8).toUpperCase()} cancelled — ${reason.trim()}`,
+            createdBy:     user!.uid,
+            createdByName: user!.name,
+            createdAt:     new Date().toISOString(),
+          });
+        }
       });
 
       onCancelled();
@@ -1493,11 +1768,16 @@ function PartialReturnModal({ order, onClose, onDone }: {
     setSaving(true);
     try {
       await runTransaction(db, async (t) => {
-        // Read all product docs first
+        // ── READ PHASE — all reads before any writes ──────────────
         const itemsWithReturn = order.items.filter((item) => (returnQtys[item.productId] || 0) > 0);
         const productRefs  = itemsWithReturn.map((item) => doc(db, "products", item.productId));
-        const productSnaps = await Promise.all(productRefs.map((ref) => t.get(ref)));
+        const customerRef  = doc(db, "customers", order.customerId);
+        const [productSnaps, customerSnap] = await Promise.all([
+          Promise.all(productRefs.map((ref) => t.get(ref))),
+          t.get(customerRef),
+        ]);
 
+        // ── WRITE PHASE ───────────────────────────────────────────
         // Write stock restores
         productSnaps.forEach((snap, i) => {
           if (!snap.exists()) return;
@@ -1529,6 +1809,26 @@ function PartialReturnModal({ order, onClose, onDone }: {
           returnedBy:        user!.uid,
           returnedByName:    user!.name,
         });
+
+        // ── Credit the return value back to the customer ledger ───
+        if (returnedTotal > 0) {
+          if (customerSnap.exists()) {
+            const currentDue = customerSnap.data().outstandingDue ?? 0;
+            const newDue     = Math.max(0, Math.round((currentDue - returnedTotal) * 100) / 100);
+            t.update(customerRef, { outstandingDue: newDue });
+          }
+          const ledgerEntryRef = doc(collection(db, "customers", order.customerId, "payments"));
+          t.set(ledgerEntryRef, {
+            type:          "adjustment",
+            direction:     "credit",
+            amount:        Math.round(returnedTotal * 100) / 100,
+            orderId:       order.id,
+            note:          `Return credit for order #${(order.id ?? "").slice(0, 8).toUpperCase()} — ${reason.trim()}`,
+            createdBy:     user!.uid,
+            createdByName: user!.name,
+            createdAt:     new Date().toISOString(),
+          });
+        }
       });
       onDone();
     } catch (err: any) {
