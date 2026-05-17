@@ -631,7 +631,9 @@ function InvoiceModal({ order, onClose, isAdmin }: {
   // Invoice options — pre-filled from saved data if already invoiced
   const [invoiceType, setInvoiceType] = useState<InvoiceType>(order.invoiceType ?? "estimate");
   const [billingMode, setBillingMode] = useState<BillingMode>(order.billingMode ?? "without_due");
+  const [qrMode, setQrMode] = useState<"with_amount" | "without_amount">("without_amount");
   const [customerDue, setCustomerDue] = useState("");
+  const [loadingDefaults, setLoadingDefaults] = useState(!hasInvoice); // only wait on first-time generation
 
   // Working invoice number — locked once minted, never changes except on regen
   const [invoiceNumber, setInvoiceNumber] = useState<string>(order.invoiceNumber || "");
@@ -651,7 +653,6 @@ function InvoiceModal({ order, onClose, isAdmin }: {
         const data = snap.data();
         setCustomerData(data);
         if (!hasInvoice) {
-          // Only auto-compute due on first-time generation
           const currentDue    = data.outstandingDue ?? 0;
           const orderBalance  = (order as any).balanceDue ?? 0;
           const historicalDue = Math.max(0, Math.round((currentDue - orderBalance) * 100) / 100);
@@ -663,6 +664,19 @@ function InvoiceModal({ order, onClose, isAdmin }: {
       }
       setLoadingDue(false);
     }).catch(() => setLoadingDue(false));
+
+    // Also load biz settings to get default QR mode
+    getDoc(doc(db, "settings", "business")).then((snap) => {
+      if (snap.exists()) {
+        const biz = snap.data();
+        if (!hasInvoice) {
+          if (biz.defaultInvoiceType) setInvoiceType(biz.defaultInvoiceType);
+          if (biz.defaultBillingMode) setBillingMode(biz.defaultBillingMode);
+        }
+        setQrMode(biz.defaultQrMode ?? "without_amount");
+      }
+      setLoadingDefaults(false);
+    }).catch(() => setLoadingDefaults(false));
   }, [order.customerId]);
 
   // Revoke blob URL on unmount
@@ -686,6 +700,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
     invNum: string,
     invType: InvoiceType,
     billMode: BillingMode,
+    qrModeVal: "with_amount" | "without_amount" = qrMode,
   ) => {
     setGenerating(true);
     if (pdfUrl) URL.revokeObjectURL(pdfUrl);
@@ -695,6 +710,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
         invoiceType: invType,
         billingMode: billMode,
         customerDue: billMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
+        qrMode: qrModeVal,
       });
       setPdfUrl(URL.createObjectURL(pdf.output("blob")));
       setModalState("preview");
@@ -727,7 +743,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
       setInvoiceNumber(minted);
 
       // 4. Render PDF with the locked number
-      await renderPdf(minted, invoiceType, billingMode);
+      await renderPdf(minted, invoiceType, billingMode, qrMode);
     } catch (e: any) {
       alert("Failed to generate invoice: " + e.message);
       setGenerating(false);
@@ -768,7 +784,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
 
       setInvoiceNumber(minted);
       setRegenReason("");
-      await renderPdf(minted, invoiceType, billingMode);
+      await renderPdf(minted, invoiceType, billingMode, qrMode);
     } catch (e: any) {
       alert("Failed to regenerate invoice: " + e.message);
       setGenerating(false);
@@ -782,6 +798,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
       invoiceType,
       billingMode,
       customerDue: billingMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
+      qrMode,
     });
     pdf.save(`${prefix}-${invoiceNumber}.pdf`);
   };
@@ -794,6 +811,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
         invoiceType,
         billingMode,
         customerDue: billingMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
+        qrMode,
       });
       const blob = pdf.output("blob");
       const file = new File([blob], `${prefix}-${invoiceNumber}.pdf`, { type: "application/pdf" });
@@ -854,6 +872,12 @@ function InvoiceModal({ order, onClose, isAdmin }: {
         {/* ── SETUP STATE — first-time generation ── */}
         {modalState === "setup" && (
           <div className="flex-1 overflow-y-auto flex items-start justify-center">
+            {loadingDefaults ? (
+              <div className="flex flex-col items-center justify-center gap-4 h-full py-24">
+                <div className="w-10 h-10 border-4 border-orange-200 border-t-orange-500 rounded-full animate-spin" />
+                <p className="text-sm text-gray-500 font-medium">Loading invoice defaults…</p>
+              </div>
+            ) : (
             <div className="w-full max-w-md p-6 space-y-5">
               <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-700">
                 ⚠️ Choose carefully — once generated, the invoice number is <strong>permanently locked</strong> to this order. Only admins can regenerate with a new number.
@@ -903,6 +927,25 @@ function InvoiceModal({ order, onClose, isAdmin }: {
                 </div>
               )}
 
+              {/* QR mode */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">UPI QR Code</label>
+                <div className="grid grid-cols-2 gap-3">
+                  {([
+                    ["without_amount", "📷 QR only", "Customer types amount (B2B recommended)"],
+                    ["with_amount",    "💰 QR + Amount", "Pre-fills balance due in UPI app"],
+                  ] as const).map(([val, label, desc]) => (
+                    <button key={val} onClick={() => setQrMode(val)}
+                      className={`p-3 rounded-xl border-2 text-left transition-all ${
+                        qrMode === val ? "border-orange-500 bg-orange-50" : "border-gray-200 hover:border-gray-300"
+                      }`}>
+                      <p className="font-semibold text-sm">{label}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{desc}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className="flex gap-3 pt-1">
                 <button onClick={onClose}
                   className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm hover:bg-gray-50">
@@ -914,6 +957,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
                 </button>
               </div>
             </div>
+            )}
           </div>
         )}
 
@@ -977,6 +1021,25 @@ function InvoiceModal({ order, onClose, isAdmin }: {
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
                 </div>
               )}
+
+              {/* QR mode */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">UPI QR Code</label>
+                <div className="grid grid-cols-2 gap-3">
+                  {([
+                    ["without_amount", "📷 QR only", "Customer types amount"],
+                    ["with_amount",    "💰 QR + Amount", "Pre-fills balance due"],
+                  ] as const).map(([val, label, desc]) => (
+                    <button key={val} onClick={() => setQrMode(val)}
+                      className={`p-3 rounded-xl border-2 text-left transition-all ${
+                        qrMode === val ? "border-orange-500 bg-orange-50" : "border-gray-200 hover:border-gray-300"
+                      }`}>
+                      <p className="font-semibold text-sm">{label}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{desc}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
 
               {/* Reason */}
               <div>

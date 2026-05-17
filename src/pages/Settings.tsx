@@ -22,6 +22,7 @@ export interface BusinessSettings {
   invoiceFooter: string;
   defaultInvoiceType: "gst" | "estimate";
   defaultBillingMode: "with_due" | "without_due";
+  defaultQrMode: "with_amount" | "without_amount";
 }
 
 const EMPTY: BusinessSettings = {
@@ -43,6 +44,7 @@ const EMPTY: BusinessSettings = {
   invoiceFooter: "Thank you for your business!",
   defaultInvoiceType: "estimate",
   defaultBillingMode: "without_due",
+  defaultQrMode: "without_amount",
 };
 
 const SETTINGS_DOC = "settings/business";
@@ -371,6 +373,21 @@ export default function Settings() {
                 <option value="without_due">Current bill only (hide due)</option>
                 <option value="with_due">Show outstanding due on bill</option>
               </select>
+            </Field>
+            <Field label="Default QR Code Amount">
+              <select
+                value={form.defaultQrMode}
+                onChange={(e) => set("defaultQrMode", e.target.value)}
+                className={inp}
+              >
+                <option value="without_amount">No amount — customer enters manually (recommended for B2B)</option>
+                <option value="with_amount">Pre-fill balance amount in QR</option>
+              </select>
+              <p className="text-xs text-gray-400 mt-1">
+                {form.defaultQrMode === "with_amount"
+                  ? "QR will encode the exact balance due. Customer can still change it in their UPI app."
+                  : "QR encodes only your UPI ID. Customer types the amount — safer for partial payments."}
+              </p>
             </Field>
             <Field label="Invoice Footer Message" span={2}>
               <input

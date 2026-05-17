@@ -13,6 +13,7 @@ export interface InvoiceOptions {
   invoiceType: InvoiceType;
   billingMode: BillingMode;
   customerDue?: number;
+  qrMode?: "with_amount" | "without_amount";
 }
 
 // ─── Firestore helpers ────────────────────────────────────────────────────────
@@ -151,14 +152,14 @@ function computeLineAmounts(item: OrderItem, isGST: boolean) {
 async function generateUpiQrDataUrl(
   upiId: string,
   businessName: string,
-  amount: number
+  amount: number,
+  withAmount: boolean,
 ): Promise<string> {
   try {
-    const upiString =
-      `upi://pay?pa=${encodeURIComponent(upiId)}` +
-      `&pn=${encodeURIComponent(businessName)}` +
-      `&am=${amount.toFixed(2)}` +
-      `&cu=INR`;
+    let upiString = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(businessName)}&cu=INR`;
+    if (withAmount && amount > 0) {
+      upiString += `&am=${amount.toFixed(2)}`;
+    }
     return await QRCode.toDataURL(upiString, {
       width: 140,
       margin: 1,
@@ -976,6 +977,7 @@ export async function buildInvoicePDF(
 
   const invoiceType: InvoiceType = options?.invoiceType ?? biz?.defaultInvoiceType ?? "estimate";
   const billingMode: BillingMode = options?.billingMode ?? biz?.defaultBillingMode ?? "without_due";
+  const qrMode = options?.qrMode ?? biz?.defaultQrMode ?? "without_amount";
   const isGST   = invoiceType === "gst";
   const showDue = billingMode === "with_due";
   const prefix  = biz?.invoicePrefix || "INV";
@@ -1015,10 +1017,13 @@ export async function buildInvoicePDF(
   // QR encodes what the customer still owes. If nothing is owed (fully pre-paid), skip QR.
   const qrAmount = balanceOnDelivery;
 
-  // ── Generate UPI QR if UPI ID is configured and amount > 0 ───
+  // ── Generate UPI QR if UPI ID is configured ──────────────────
+  // withAmount=true  → QR pre-fills the balance due (customer can still change it)
+  // withAmount=false → QR encodes only UPI ID, customer types amount (safer for B2B)
   const upiId = (biz?.upiId || "").trim();
-  const qrDataUrl = upiId && qrAmount > 0
-    ? await generateUpiQrDataUrl(upiId, (biz?.businessName || "Payment").trim(), qrAmount)
+  const withAmount = qrMode === "with_amount";
+  const qrDataUrl = upiId && (withAmount ? qrAmount > 0 : true)
+    ? await generateUpiQrDataUrl(upiId, (biz?.businessName || "Payment").trim(), qrAmount, withAmount)
     : "";
 
   const html = buildInvoiceHTML({
