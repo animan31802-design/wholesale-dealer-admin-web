@@ -41,7 +41,7 @@ interface CashEntry {
   id?: string;
   agentId: string;
   agentName: string;
-  type: "order_advance" | "order_delivery" | "admin_collection";
+  type: "order_advance" | "order_delivery" | "admin_collection" | string; // open string so unknown future types show a fallback label instead of crashing
   orderId?: string;
   amount: number;              // always positive
   direction: "in" | "out";    // in = cash with agent, out = handed to admin
@@ -228,11 +228,14 @@ function HistoryModal({ agent, onClose }: { agent: AppUser; onClose: () => void 
     }).catch(() => setLoading(false));
   }, [agent.uid]);
 
+  // FIX: formalised as a constant with an explicit fallback so unknown type strings
+  // from future mobile versions show a readable label rather than a raw key.
   const TYPE_LABELS: Record<string, string> = {
-    order_advance: "💼 Advance Collected",
-    order_delivery: "🚚 Delivery Collection",
+    order_advance:    "💼 Advance Collected",
+    order_delivery:   "🚚 Delivery Collection",
     admin_collection: "✅ Handed to Admin",
   };
+  const typeLabel = (type: string) => TYPE_LABELS[type] ?? `📋 ${type.replace(/_/g, " ")}`;
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -278,7 +281,7 @@ function HistoryModal({ agent, onClose }: { agent: AppUser; onClose: () => void 
                           ? "bg-blue-100 text-blue-700"
                           : "bg-green-100 text-green-700"
                       }`}>
-                        {TYPE_LABELS[e.type] ?? e.type}
+                        {typeLabel(e.type)}
                       </span>
                     </td>
                     <td className="px-5 py-3 text-gray-500 text-xs max-w-[160px]">

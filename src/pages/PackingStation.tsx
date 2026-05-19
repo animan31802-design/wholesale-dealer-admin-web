@@ -62,16 +62,37 @@ export default function PackingStation() {
   const markPacked = async (order: Order) => {
     setConfirmingId(order.id!);
     try {
-      // Use a transaction so we verify status is still "pending" before writing —
-      // prevents double-packing if two staff tap simultaneously.
       await runTransaction(db, async (t) => {
-        const snap = await t.get(doc(db, "orders", order.id!));
-        if (!snap.exists()) throw new Error("Order not found.");
-        if (snap.data().status !== "pending") throw new Error("Order is no longer pending.");
-        t.update(doc(db, "orders", order.id!), {
-          status: "packed",
-          packedAt: new Date().toISOString(),
-          packedBy: user?.uid,
+        // ── READ PHASE (all reads before any write) ───────────────
+        const orderRef     = doc(db, "orders", order.id!);
+        const orderSnap    = await t.get(orderRef);
+        if (!orderSnap.exists())                  throw new Error("Order not found.");
+        if (orderSnap.data().status !== "pending") throw new Error("Order is no longer pending.");
+
+        // Read every tracked product involved in this order
+        const productRefs  = order.items.map((item) => doc(db, "products", item.productId));
+        const productSnaps = await Promise.all(productRefs.map((ref) => t.get(ref)));
+
+        // ── WRITE PHASE ───────────────────────────────────────────
+        // FIX: deduct actual stock and clear reservation for each tracked product
+        productSnaps.forEach((snap, i) => {
+          if (!snap.exists()) return;
+          const data = snap.data();
+          if (!data.trackInventory) return;          // skip untracked products
+          const item        = order.items[i];
+          const newStock    = Math.max(0, (data.stock         ?? 0) - item.quantity);
+          const newReserved = Math.max(0, (data.reservedStock ?? 0) - item.quantity);
+          t.update(productRefs[i], {
+            stock:         newStock,
+            reservedStock: newReserved,
+            updatedAt:     new Date().toISOString(),
+          });
+        });
+
+        t.update(orderRef, {
+          status:      "packed",
+          packedAt:    new Date().toISOString(),
+          packedBy:    user?.uid,
           packedByName: user?.name,
         });
       });

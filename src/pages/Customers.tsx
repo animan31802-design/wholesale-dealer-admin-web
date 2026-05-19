@@ -338,6 +338,7 @@ ${skipped} rows skipped (missing shop name or phone)`);
                 <th className="px-5 py-4">Region</th>
                 <th className="px-5 py-4">Area</th>
                 <th className="px-5 py-4">Outstanding Due</th>
+                <th className="px-5 py-4">Last Order</th>
                 <th className="px-5 py-4">Location</th>
                 {isAdmin && <th className="px-5 py-4">Actions</th>}
               </tr>
@@ -371,6 +372,12 @@ ${skipped} rows skipped (missing shop name or phone)`);
                       ) : (
                         <span className="text-green-600 text-xs font-medium">✓ Clear</span>
                       )}
+                    </td>
+                    <td className="px-5 py-3 text-xs text-gray-500">
+                      {/* FIX: show lastOrderAt written by both web and mobile */}
+                      {(customer as any).lastOrderAt
+                        ? new Date((customer as any).lastOrderAt).toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"2-digit" })
+                        : <span className="text-gray-300">—</span>}
                     </td>
                     <td className="px-5 py-3">
                       {customer.lat ? (

@@ -1266,6 +1266,10 @@ export function OrderDetailPanel({
         <div className="flex items-start justify-between px-6 py-4 border-b border-gray-100 bg-gray-50 flex-shrink-0">
           <div>
             <h3 className="text-lg font-bold text-gray-800">{order.customerName}</h3>
+            {/* FIX: show orderNo written by mobile app; fall back to short Firestore ID */}
+            <p className="text-xs text-gray-400 mt-0.5 font-mono">
+              #{order.orderNo || (order.id ?? "").slice(0, 10).toUpperCase()}
+            </p>
             <p className="text-xs text-gray-400 mt-0.5">{order.customerAddress}</p>
             {order.customerPhone && (
               <a href={`tel:${order.customerPhone}`} className="text-xs text-blue-500 hover:underline">
@@ -1332,24 +1336,24 @@ export function OrderDetailPanel({
                 <span className="font-bold text-gray-800">₹{order.totalAmount.toFixed(2)}</span>
               </div>
               {/* Advance paid by field agent at order creation */}
-              {(order as any).advancePaid > 0 && (
+              {order.advancePaid > 0 && (
                 <div className="flex justify-between text-sm">
                   <span className="text-blue-600 font-medium">
                     💼 Advance (Field Agent)
                   </span>
-                  <span className="font-medium text-blue-600">₹{((order as any).advancePaid as number).toFixed(2)}</span>
+                  <span className="font-medium text-blue-600">₹{(order.advancePaid as number).toFixed(2)}</span>
                 </div>
               )}
               {/* Amount collected by delivery agent — only if different from advance */}
               {order.amountCollected !== undefined &&
                 order.status === "delivered" &&
-                order.amountCollected !== (order as any).advancePaid && (
+                order.amountCollected !== order.advancePaid && (
                 <div className="flex justify-between text-sm">
                   <span className="text-green-600 font-medium">
                     🚚 Collected at Delivery
                   </span>
                   <span className="font-medium text-green-600">
-                    ₹{(order.amountCollected - ((order as any).advancePaid ?? 0)).toFixed(2)}
+                    ₹{(order.amountCollected - (order.advancePaid ?? 0)).toFixed(2)}
                   </span>
                 </div>
               )}
@@ -1532,23 +1536,26 @@ function CancelOrderModal({
         ]);
 
         // ── WRITES AFTER ALL READS ────────────────────────────────
+        // FIX: Stock restore logic gated on order status.
+        // • pending  → only reservedStock was held (stock never deducted by packing) → clear reservation only
+        // • packed   → packing already deducted stock → restore stock AND clear reservation
+        const isPacked = order.status === "packed";
         productSnaps.forEach((snap, i) => {
           if (!snap.exists()) return;
-          const item        = order.items[i];
-          const data        = snap.data();
-
-          // Only restore stock for tracked products
+          const item = order.items[i];
+          const data = snap.data();
           if (!data.trackInventory) return;
 
-          // Restore actual stock number (what admin sees in Products page)
-          const newStock    = (data.stock ?? 0) + item.quantity;
-          // Also reduce reservedStock if it was set
-          const newReserved = Math.max(0, (data.reservedStock ?? 0) - item.quantity);
-
-          t.update(productRefs[i], {
-            stock:         newStock,
-            reservedStock: newReserved,
-          });
+          const updates: Record<string, number | string> = {
+            reservedStock: Math.max(0, (data.reservedStock ?? 0) - item.quantity),
+            updatedAt:     new Date().toISOString(),
+          };
+          if (isPacked) {
+            // Packing deducted actual stock — restore it
+            updates.stock = (data.stock ?? 0) + item.quantity;
+          }
+          // pending orders: stock was never deducted — do NOT touch stock
+          t.update(productRefs[i], updates);
         });
 
         t.update(doc(db, "orders", order.id!), {
@@ -1559,23 +1566,24 @@ function CancelOrderModal({
           cancellationReason: reason.trim(),
         });
 
-        // ── Reverse the order's effect on customer outstanding due ─
-        // The order debit = totalAmount, credit = advancePaid (already collected).
-        // On cancel we credit back the net (totalAmount - advancePaid) = balanceDue
-        // since the advance was already physically collected and doesn't change.
-        const advance     = (order as any).advancePaid ?? 0;
-        const netDebit    = Math.max(0, order.totalAmount - advance); // the remaining uncollected part
-        if (netDebit > 0 && customerSnap.exists()) {
-          const currentDue = customerSnap.data().outstandingDue ?? 0;
-          const newDue     = Math.max(0, Math.round((currentDue - netDebit) * 100) / 100);
-          t.update(customerRef, { outstandingDue: newDue });
+        // ── Reverse the order's full debit on the customer ledger ──
+        // FIX: credit back totalAmount (the full original debit), not just netDebit.
+        // The advance is a physical cash matter tracked in agentCashLedger separately.
+        // The customer ledger must fully reverse: debit was totalAmount → credit totalAmount.
+        if (customerSnap.exists()) {
+          const advance     = order.advancePaid ?? 0;
+          const currentDue  = customerSnap.data().outstandingDue ?? 0;
+          // Reverse only what was added to outstandingDue = totalAmount - advance
+          const netDebit    = Math.max(0, order.totalAmount - advance);
+          const newDue      = Math.max(0, Math.round((currentDue - netDebit) * 100) / 100);
+          t.update(customerRef, { outstandingDue: newDue, updatedAt: new Date().toISOString() });
 
-          // Ledger credit entry for the cancelled order's net balance
+          // Ledger entry: credit the full order total to fully reverse the original debit
           const ledgerEntryRef = doc(collection(db, "customers", order.customerId, "payments"));
           t.set(ledgerEntryRef, {
             type:          "order_cancelled",
             direction:     "credit",
-            amount:        netDebit,
+            amount:        order.totalAmount,   // full reversal of the original debit
             orderId:       order.id,
             note:          `Order #${(order.id ?? "").slice(0, 8).toUpperCase()} cancelled — ${reason.trim()}`,
             createdBy:     user!.uid,

@@ -96,6 +96,15 @@ export default function Settings() {
     setForm((f) => ({ ...f, [key]: value }));
 
   const handleSave = async () => {
+    // FIX: validate defaultInvoiceType is set so mobile orders always get a real type
+    if (!form.businessName.trim()) {
+      alert("Business name is required.");
+      return;
+    }
+    if (!form.defaultInvoiceType) {
+      alert("Please select a Default Invoice Type before saving. This is used when printing invoices for mobile orders.");
+      return;
+    }
     setSaving(true);
     setSaved(false);
     try {

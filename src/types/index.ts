@@ -35,6 +35,10 @@ export interface Customer {
   outstandingDue?: number;
   creditLimit?: number;
   createdAt?: string;
+  createdBy?: string;      // uid of field agent who created this customer
+  lastOrderAt?: string;    // ISO timestamp of most recent order
+  lastOrderId?: string;    // Firestore id of most recent order
+  updatedAt?: string;
 }
 
 export type GSTRate = "none" | "5" | "12" | "18" | "28";
@@ -100,16 +104,24 @@ export type BillingMode = "with_due" | "without_due";
 
 export interface Order {
   id?: string;
+  orderNo?: string;          // human-readable order number (written by both apps)
   customerId: string;
   customerName: string;
   customerAddress: string;
   customerPhone?: string;
+  customerGstin?: string;    // written by web and (fixed) mobile at order creation
   customerLat?: number;
   customerLng?: number;
   agentId: string;
   agentName: string;
+  regionId?: string;
+  regionName?: string;
   items: OrderItem[];
   totalAmount: number;
+  advancePaid?: number;      // advance collected by field agent at order creation
+  balanceDue?: number;       // totalAmount - advancePaid; remaining for delivery
+  amountCollected?: number;  // updated by delivery agent at delivery
+  paymentMode?: "cash" | "upi" | "bank" | "credit" | "pending";
   status: OrderStatus;
   deliveryPersonId?: string;
   deliveryPersonName?: string;
@@ -123,8 +135,8 @@ export interface Order {
   voidedInvoices?: Array<{ invoiceNumber: string; voidedAt: string; voidedBy: string; voidedByName: string }>;
   signatureUrl?: string;
   signature?: string;
-  amountCollected?: number;
-  paymentMode?: "cash" | "upi" | "bank" | "credit";
+  signatureCollected?: boolean;
+  billWithAgent?: boolean;
   createdAt: string;
   packedAt?: string;
   packedBy?: string;
@@ -134,6 +146,4 @@ export interface Order {
   cancelledBy?: string;
   cancelledByName?: string;
   cancellationReason?: string;
-  regionId?: string;
-  regionName?: string;
 }

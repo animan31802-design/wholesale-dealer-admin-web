@@ -758,9 +758,16 @@ export default function CreateOrderPage() {
 
         // Use the customerSnap already read in the READ PHASE above —
         // no additional t.get() here, which would violate read-before-write rule.
+        const now     = new Date().toISOString();
         const liveDue = customerSnap.exists() ? (customerSnap.data().outstandingDue ?? 0) : prevBalance;
         const newDue  = round2(liveDue + grandTotal - paid);
-        t.update(customerRef, { outstandingDue: newDue });
+        // FIX: also stamp lastOrderAt / lastOrderId / updatedAt on customer
+        t.update(customerRef, {
+          outstandingDue: newDue,
+          lastOrderAt:    now,
+          lastOrderId:    newOrderId,
+          updatedAt:      now,
+        });
 
         // Write ledger entries atomically with the order
         const ledgerCol = collection(db, "customers", customer.id!, "payments");
@@ -775,20 +782,21 @@ export default function CreateOrderPage() {
           note:          "Order #" + newOrderId.slice(0, 8).toUpperCase() + " placed",
           createdBy:     user.uid,
           createdByName: user.name,
-          createdAt:     new Date().toISOString(),
+          createdAt:     now,
         });
 
-        // Credit: advance paid at order creation (reduces what customer owes)
+        // FIX: unified type "advance_collected" (matches mobile) instead of "delivery_payment"
         if (paid > 0) {
           t.set(doc(ledgerCol), {
-            type:          "delivery_payment",
+            type:          "advance_collected",
             direction:     "credit",
             amount:        round2(paid),
             orderId:       newOrderId,
+            paymentMode:   paymentMode,
             note:          "Advance collected at order #" + newOrderId.slice(0, 8).toUpperCase() + " (" + paymentMode + ")",
             createdBy:     user.uid,
             createdByName: user.name,
-            createdAt:     new Date().toISOString(),
+            createdAt:     now,
           });
         }
       });
@@ -797,32 +805,38 @@ export default function CreateOrderPage() {
       delete draftStore[customer.id!];
       setLastOrderId(newOrderId);
 
-      // ── Sync field agent cash ledger if advance was collected ──
-      if (paid > 0 && user) {
+      // ── Sync field agent cash ledger ──────────────────────────────
+      // FIX: Always seed the summary doc (merge) so admin sees agent even on
+      // zero-advance orders. Only write an entry row when cash changed hands.
+      if (user) {
         try {
           const cashRef = doc(db, "agentCashLedger", user.uid);
           await runTransaction(db, async (t) => {
-            const snap = await t.get(cashRef);
+            const snap    = await t.get(cashRef);
             const current = snap.exists() ? (snap.data().cashInHand ?? 0) : 0;
+            // Always upsert the summary doc (idempotent via merge)
             t.set(cashRef, {
-              agentId: user.uid,
-              agentName: user.name,
-              agentRole: user.role,
-              cashInHand: round2(current + paid),
+              agentId:    user.uid,
+              agentName:  user.name,
+              agentRole:  user.role,
+              cashInHand: round2(current + paid),  // +0 on zero-advance — value unchanged
             }, { merge: true });
-            const entryRef = doc(collection(db, "agentCashLedger", user.uid, "entries"));
-            t.set(entryRef, {
-              agentId: user.uid,
-              agentName: user.name,
-              type: "order_advance",
-              orderId: newOrderId,
-              amount: paid,
-              direction: "in",
-              note: `Advance collected for order #${newOrderId.slice(0, 8).toUpperCase()} (${customer.shopName})`,
-              createdBy: user.uid,
-              createdByName: user.name,
-              createdAt: new Date().toISOString(),
-            });
+            // Only write an entry row when cash actually changed hands
+            if (paid > 0) {
+              const entryRef = doc(collection(db, "agentCashLedger", user.uid, "entries"));
+              t.set(entryRef, {
+                agentId:       user.uid,
+                agentName:     user.name,
+                type:          "order_advance",
+                orderId:       newOrderId,
+                amount:        paid,
+                direction:     "in",
+                note:          `Advance collected for order #${newOrderId.slice(0, 8).toUpperCase()} (${customer.shopName})`,
+                createdBy:     user.uid,
+                createdByName: user.name,
+                createdAt:     new Date().toISOString(),
+              });
+            }
           });
         } catch (e) {
           // Non-critical — don't block the order success
