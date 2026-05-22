@@ -15,17 +15,24 @@ import { useTamilSearch } from "../utils/UseTamilSearch";
 import { TamilSearchInput } from "../components/TamilSearchInput";
 
 const STATUS_COLORS: Record<string, string> = {
-  pending:          "bg-yellow-100 text-yellow-700",
-  packed:           "bg-blue-100 text-blue-700",
-  assigned:         "bg-indigo-100 text-indigo-700",
-  out_for_delivery: "bg-purple-100 text-purple-700",
-  delivered:        "bg-green-100 text-green-700",
-  cancelled:        "bg-gray-100 text-gray-500",
+  pending:                "bg-yellow-100 text-yellow-700",
+  packed:                 "bg-blue-100 text-blue-700",
+  assigned:               "bg-indigo-100 text-indigo-700",
+  out_for_delivery:       "bg-purple-100 text-purple-700",
+  attempted:              "bg-orange-100 text-orange-700",
+  returned_to_warehouse:  "bg-red-100 text-red-700",
+  delivered:              "bg-green-100 text-green-700",
+  cancelled:              "bg-gray-100 text-gray-500",
 };
 const STATUS_LABELS: Record<string, string> = {
-  pending: "Pending", packed: "Packed", assigned: "Assigned",
-  out_for_delivery: "Out for Delivery", delivered: "Delivered",
-  cancelled: "Cancelled",
+  pending:               "Pending",
+  packed:                "Packed",
+  assigned:              "Assigned",
+  out_for_delivery:      "Out for Delivery",
+  attempted:             "Attempted",
+  returned_to_warehouse: "Returned to Warehouse",
+  delivered:             "Delivered",
+  cancelled:             "Cancelled",
 };
 
 export default function Orders() {
@@ -39,12 +46,14 @@ export default function Orders() {
   const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set());
   const [showBulkAssign, setShowBulkAssign] = useState(false);
   const [returnOrder, setReturnOrder]     = useState<Order | null>(null);
+  const [receiveBackOrder, setReceiveBackOrder] = useState<Order | null>(null);
+  const [reassignOrder, setReassignOrder] = useState<Order | null>(null);
   const [smartRegionMatch, setSmartRegionMatch] = useState(true);
   const { user } = useAuthStore();
   const navigate = useNavigate();
 
   // ── Filter state ─────────────────────────────────────────────
-  const [activeTab, setActiveTab]   = useState<"all"|"pending"|"packed"|"assigned"|"out_for_delivery"|"delivered"|"cancelled">("all");
+  const [activeTab, setActiveTab]   = useState<"all"|"pending"|"packed"|"assigned"|"out_for_delivery"|"attempted"|"returned_to_warehouse"|"delivered"|"cancelled">("all");
   const [filterAgent, setFilterAgent] = useState("");
   const [filterRegion, setFilterRegion] = useState("");
   const [filterDelivery, setFilterDelivery] = useState("");
@@ -209,13 +218,15 @@ export default function Orders() {
   }, [searchResults, activeTab, filterAgent, filterRegion, filterDelivery, dateFrom, dateTo]);
 
   const tabCounts = {
-    all:              orders.length,
-    pending:          orders.filter((o) => o.status === "pending").length,
-    packed:           orders.filter((o) => o.status === "packed").length,
-    assigned:         orders.filter((o) => o.status === "assigned").length,
-    out_for_delivery: orders.filter((o) => o.status === "out_for_delivery").length,
-    delivered:        orders.filter((o) => o.status === "delivered").length,
-    cancelled:        orders.filter((o) => o.status === "cancelled").length,
+    all:                    orders.length,
+    pending:                orders.filter((o) => o.status === "pending").length,
+    packed:                 orders.filter((o) => o.status === "packed").length,
+    assigned:               orders.filter((o) => o.status === "assigned").length,
+    out_for_delivery:       orders.filter((o) => o.status === "out_for_delivery").length,
+    attempted:              orders.filter((o) => o.status === "attempted").length,
+    returned_to_warehouse:  orders.filter((o) => o.status === "returned_to_warehouse").length,
+    delivered:              orders.filter((o) => o.status === "delivered").length,
+    cancelled:              orders.filter((o) => o.status === "cancelled").length,
   };
 
   const hasActiveFilters = search || filterAgent || filterRegion || filterDelivery || dateFrom || dateTo;
@@ -244,7 +255,7 @@ export default function Orders() {
       "Items":             o.items.map((i) => `${i.productName} x${i.quantity}`).join(", "),
       "Total Amount":      o.totalAmount,
       "Amount Collected":  o.amountCollected ?? "",
-      "Balance Due":       o.amountCollected !== undefined ? o.totalAmount - o.amountCollected : "",
+      "Balance Due":       o.amountCollected !== undefined ? Math.max(0, o.totalAmount - (o.advancePaid ?? 0) - o.amountCollected) : "",
       "Status":            STATUS_LABELS[o.status] || o.status,
       "Delivery Agent":    o.deliveryPersonName || "",
       "Vehicle":           o.vehicleNumber || "",
@@ -321,14 +332,17 @@ export default function Orders() {
         </div>
       </div>
 
-      {/* Status tabs */}
       <div className="flex gap-1 mb-4 overflow-x-auto pb-1">
-        {(["all","pending","packed","assigned","out_for_delivery","delivered","cancelled"] as const).map((tab) => (
+        {(["all","pending","packed","assigned","out_for_delivery","attempted","returned_to_warehouse","delivered","cancelled"] as const).map((tab) => (
           <button key={tab} onClick={() => setActiveTab(tab)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
               activeTab === tab
                 ? "bg-gray-800 text-white"
-                : "bg-white text-gray-500 hover:bg-gray-100 border border-gray-200"
+                : tab === "attempted" && tabCounts.attempted > 0
+                  ? "bg-orange-100 text-orange-700 border border-orange-300 hover:bg-orange-200"
+                  : tab === "returned_to_warehouse" && tabCounts.returned_to_warehouse > 0
+                    ? "bg-red-100 text-red-700 border border-red-300 hover:bg-red-200"
+                    : "bg-white text-gray-500 hover:bg-gray-100 border border-gray-200"
             }`}
           >
             {tab === "all" ? "All" : STATUS_LABELS[tab]}
@@ -467,6 +481,7 @@ export default function Orders() {
               <th className="px-5 py-4">Amount</th>
               <th className="px-5 py-4">Status</th>
               <th className="px-5 py-4">Delivery Agent</th>
+              <th className="px-5 py-4">Order #</th>
               <th className="px-5 py-4">Date</th>
               <th className="px-5 py-4">Actions</th>
             </tr>
@@ -502,6 +517,9 @@ export default function Orders() {
                     ? <><p className="font-medium text-gray-700">{order.deliveryPersonName}</p><p>{order.vehicleNumber}</p></>
                     : <span className="text-gray-300">—</span>}
                 </td>
+                <td className="px-5 py-3 text-gray-500 text-xs font-mono">
+                  {order.orderNo || (order.id ?? "").slice(0, 10).toUpperCase()}
+                </td>
                 <td className="px-5 py-3 text-gray-400 text-xs">
                   {new Date(order.createdAt).toLocaleDateString("en-IN")}
                 </td>
@@ -520,7 +538,25 @@ export default function Orders() {
                       </button>
                     )}
                     {order.status === "assigned" && (
-                      <span className="text-xs text-indigo-500 font-medium">Waiting for collection</span>
+                      <>
+                        <span className="text-xs text-indigo-500 font-medium">Waiting for collection</span>
+                        <button onClick={(e) => { e.stopPropagation(); setReassignOrder(order); }}
+                          className="bg-indigo-100 text-indigo-600 text-xs px-3 py-1.5 rounded-lg hover:bg-indigo-200 font-medium">
+                          🔄 Reassign
+                        </button>
+                      </>
+                    )}
+                    {order.status === "attempted" && (
+                      <button onClick={(e) => { e.stopPropagation(); setReceiveBackOrder(order); }}
+                        className="bg-red-500 text-white text-xs px-3 py-1.5 rounded-lg hover:bg-red-600 font-medium">
+                        📦 Receive Items Back
+                      </button>
+                    )}
+                    {order.status === "returned_to_warehouse" && (
+                      <button onClick={(e) => { e.stopPropagation(); setReassignOrder(order); }}
+                        className="bg-indigo-500 text-white text-xs px-3 py-1.5 rounded-lg hover:bg-indigo-600">
+                        🔄 Reassign Agent
+                      </button>
                     )}
                     {(order.status === "pending" || order.status === "packed") && (
                       <button onClick={(e) => { e.stopPropagation(); setCancelOrder(order); }}
@@ -529,12 +565,14 @@ export default function Orders() {
                       </button>
                     )}
                     {order.status === "delivered" &&
-                      order.amountCollected !== undefined &&
-                      order.amountCollected < order.totalAmount && (
-                      <span className="bg-red-100 text-red-600 text-xs px-2 py-1 rounded-lg font-medium">
-                        ₹{(order.totalAmount - order.amountCollected).toFixed(2)} due
-                      </span>
-                    )}
+                      order.amountCollected !== undefined && (() => {
+                        const due = Math.max(0, order.totalAmount - (order.advancePaid ?? 0) - order.amountCollected);
+                        return due > 0 ? (
+                          <span className="bg-red-100 text-red-600 text-xs px-2 py-1 rounded-lg font-medium">
+                            ₹{due.toFixed(2)} due
+                          </span>
+                        ) : null;
+                      })()}
                     {order.status === "delivered" && (
                       <button onClick={(e) => { e.stopPropagation(); setReturnOrder(order); }}
                         className="bg-red-100 text-red-600 text-xs px-3 py-1.5 rounded-lg hover:bg-red-200 font-medium">
@@ -568,6 +606,24 @@ export default function Orders() {
           order={returnOrder}
           onClose={() => setReturnOrder(null)}
           onDone={() => setReturnOrder(null)}
+        />
+      )}
+
+      {receiveBackOrder && (
+        <ReceiveBackModal
+          order={receiveBackOrder}
+          onClose={() => setReceiveBackOrder(null)}
+          onDone={() => setReceiveBackOrder(null)}
+        />
+      )}
+
+      {reassignOrder && (
+        <ReassignDeliveryModal
+          order={reassignOrder}
+          deliveryUsers={deliveryUsers}
+          onClose={() => setReassignOrder(null)}
+          onDone={() => setReassignOrder(null)}
+          smartRegionMatch={smartRegionMatch}
         />
       )}
 
@@ -1241,21 +1297,51 @@ export function OrderDetailPanel({
         })
       : undefined;
 
+  const attempts = (order as any).deliveryAttempts as import("../types").DeliveryAttempt[] | undefined;
+
+  const ATTEMPT_REASON_LABELS: Record<string, string> = {
+    shop_closed:          "🔒 Shop Closed",
+    customer_unavailable: "👤 Customer Unavailable",
+    refused_delivery:     "🚫 Refused Delivery",
+    other:                "📋 Other",
+  };
+
   const timeline: { label: string; time?: string; done: boolean; color: string }[] = [
-    { label: "Order Placed",       time: fmt(order.createdAt),   done: true,                              color: order.status === "cancelled" ? "bg-red-400" : "bg-yellow-400" },
-    { label: "Packed",             time: fmt(order.packedAt),    done: !!order.packedAt,                  color: "bg-blue-400"   },
-    { label: "Assigned to Agent",  time: fmt(order.assignedAt),  done: !!order.assignedAt,                color: "bg-indigo-400" },
-    { label: "Out for Delivery",   time: undefined,              done: order.status === "out_for_delivery" || order.status === "delivered", color: "bg-purple-400" },
-    { label: "Delivered",          time: fmt(order.deliveredAt), done: order.status === "delivered",       color: "bg-green-400"  },
+    { label: "Order Placed",          time: fmt(order.createdAt),                done: true,                                                                  color: order.status === "cancelled" ? "bg-red-400" : "bg-yellow-400" },
+    { label: "Packed",                time: fmt(order.packedAt),                 done: !!order.packedAt,                                                      color: "bg-blue-400"   },
+    { label: "Assigned to Agent",     time: fmt(order.assignedAt),               done: !!order.assignedAt,                                                    color: "bg-indigo-400" },
+    { label: "Out for Delivery",      time: fmt((order as any).outForDeliveryAt), done: ["out_for_delivery","attempted","returned_to_warehouse","delivered"].includes(order.status), color: "bg-purple-400" },
+    ...(attempts && attempts.length > 0 ? [{
+      label: `Attempted (${attempts.length}x)`,
+      time: fmt(attempts[attempts.length - 1].attemptedAt),
+      done: true,
+      color: "bg-orange-400",
+    }] : []),
+    ...((order as any).returnedToWarehouseAt ? [{
+      label: "Returned to Warehouse",
+      time: fmt((order as any).returnedToWarehouseAt),
+      done: true,
+      color: "bg-red-400",
+    }] : []),
+    { label: "Delivered",             time: fmt(order.deliveredAt),              done: order.status === "delivered",                                          color: "bg-green-400"  },
   ];
 
   const balance =
     order.amountCollected !== undefined
-      ? order.totalAmount - order.amountCollected
+      ? Math.max(0, order.totalAmount - (order.advancePaid ?? 0) - order.amountCollected)
       : null;
+
+  const [receiveBack, setReceiveBack]   = useState(false);
+  const [reassign,    setReassign]      = useState(false);
 
   return (
     <>
+      {receiveBack && (
+        <ReceiveBackModal order={order} onClose={() => setReceiveBack(false)} onDone={() => { setReceiveBack(false); onClose(); }} />
+      )}
+      {reassign && (
+        <ReassignDeliveryModal order={order} deliveryUsers={deliveryUsers} onClose={() => setReassign(false)} onDone={() => { setReassign(false); onClose(); }} />
+      )}
       {/* Backdrop */}
       <div className="fixed inset-0 bg-black/40 z-40" onClick={onClose} />
 
@@ -1336,18 +1422,18 @@ export function OrderDetailPanel({
                 <span className="font-bold text-gray-800">₹{order.totalAmount.toFixed(2)}</span>
               </div>
               {/* Advance paid by field agent at order creation */}
-              {order.advancePaid > 0 && (
+              {(order.advancePaid ?? 0) > 0 && (
                 <div className="flex justify-between text-sm">
                   <span className="text-blue-600 font-medium">
                     💼 Advance (Field Agent)
                   </span>
-                  <span className="font-medium text-blue-600">₹{(order.advancePaid as number).toFixed(2)}</span>
+                  <span className="font-medium text-blue-600">₹{(order.advancePaid ?? 0).toFixed(2)}</span>
                 </div>
               )}
               {/* Amount collected by delivery agent — only if different from advance */}
               {order.amountCollected !== undefined &&
                 order.status === "delivered" &&
-                order.amountCollected !== order.advancePaid && (
+                order.amountCollected !== (order.advancePaid ?? 0) && (
                 <div className="flex justify-between text-sm">
                   <span className="text-green-600 font-medium">
                     🚚 Collected at Delivery
@@ -1424,10 +1510,60 @@ export function OrderDetailPanel({
             </div>
           )}
 
-          {/* Cancellation info */}
+          {/* Delivery Attempt History */}
+          {attempts && attempts.length > 0 && (
+            <div className="px-6 py-5 border-b border-gray-100 bg-orange-50">
+              <p className="text-xs font-semibold text-orange-400 uppercase tracking-widest mb-3">
+                Delivery Attempts ({attempts.length})
+              </p>
+              <div className="space-y-3">
+                {attempts.map((a, i) => (
+                  <div key={i} className="bg-white border border-orange-200 rounded-xl px-4 py-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-semibold text-orange-600">
+                        {ATTEMPT_REASON_LABELS[a.reason] ?? a.reason}
+                      </span>
+                      <span className="text-xs text-gray-400">{fmt(a.attemptedAt)}</span>
+                    </div>
+                    <p className="text-xs text-gray-500">By: {a.agentName}</p>
+                    {a.notes && (
+                      <p className="text-xs text-gray-600 mt-1 bg-orange-50 rounded-lg px-2 py-1">
+                        "{a.notes}"
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Returned to warehouse info */}
+          {(order as any).returnedToWarehouseAt && (
+            <div className="px-6 py-4 border-b border-gray-100 bg-red-50">
+              <p className="text-xs font-semibold text-red-400 uppercase tracking-widest mb-2">
+                Returned to Warehouse
+              </p>
+              <p className="text-sm text-gray-700">
+                Received by <span className="font-medium">{(order as any).returnedToWarehouseByName ?? "Admin"}</span>
+              </p>
+              <p className="text-xs text-gray-400 mt-0.5">{fmt((order as any).returnedToWarehouseAt)}</p>
+            </div>
+          )}
           {order.status === "cancelled" && (
             <div className="px-6 py-5 border-b border-gray-100 bg-red-50">
               <p className="text-xs font-semibold text-red-400 uppercase tracking-widest mb-3">Cancellation Details</p>
+              {/* Refund notice — shown when advance was collected and a physical refund is due */}
+              {(order as any).refundDue > 0 && (
+                <div className="bg-amber-100 border border-amber-300 rounded-lg p-3 mb-3">
+                  <p className="text-sm font-semibold text-amber-800">💰 Physical Refund Required</p>
+                  <p className="text-xs text-amber-700 mt-1">
+                    ₹{((order as any).refundDue as number).toFixed(2)} must be returned physically to {order.customerName}.
+                  </p>
+                  {(order as any).refundNote && (
+                    <p className="text-xs text-amber-600 mt-1">{(order as any).refundNote}</p>
+                  )}
+                </div>
+              )}
               <div className="space-y-2 text-sm">
                 {order.cancellationReason && (
                   <div>
@@ -1465,6 +1601,30 @@ export function OrderDetailPanel({
         {/* Action footer */}
         <div className="flex-shrink-0 border-t border-gray-100 px-6 py-4 bg-gray-50">
           <div className="flex gap-2 flex-wrap">
+            {order.status === "attempted" && (
+              <button
+                onClick={() => setReceiveBack(true)}
+                className="flex-1 bg-red-500 text-white py-2.5 rounded-xl text-sm font-medium hover:bg-red-600"
+              >
+                📦 Receive Items Back
+              </button>
+            )}
+            {order.status === "returned_to_warehouse" && (
+              <button
+                onClick={() => setReassign(true)}
+                className="flex-1 bg-indigo-500 text-white py-2.5 rounded-xl text-sm font-medium hover:bg-indigo-600"
+              >
+                🔄 Reassign &amp; Send Out
+              </button>
+            )}
+            {order.status === "assigned" && (
+              <button
+                onClick={() => setReassign(true)}
+                className="flex-1 bg-indigo-100 text-indigo-700 py-2.5 rounded-xl text-sm font-medium hover:bg-indigo-200"
+              >
+                🔄 Reassign Agent
+              </button>
+            )}
             {order.status === "pending" && (
               <button
                 onClick={() => { onMarkPacked(order.id!); onClose(); }}
@@ -1506,7 +1666,160 @@ export function OrderDetailPanel({
   );
 }
 
-// ── Cancel Order Modal ────────────────────────────────────────────
+// ── Receive Items Back Modal ────────────────────────────────────────────────
+function ReceiveBackModal({ order, onClose, onDone }: {
+  order: Order; onClose: () => void; onDone: () => void;
+}) {
+  const { user } = useAuthStore();
+  const [notes, setNotes]   = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async () => {
+    setSaving(true);
+    try {
+      await updateDoc(doc(db, "orders", order.id!), {
+        status:                    "returned_to_warehouse",
+        currentHolder:             "warehouse",
+        returnedToWarehouseAt:     new Date().toISOString(),
+        returnedToWarehouseBy:     user!.uid,
+        returnedToWarehouseByName: user!.name,
+        ...(notes.trim() ? { returnNotes: notes.trim() } : {}),
+      });
+      onDone();
+    } catch (err: any) {
+      alert(err.message || "Failed to update order.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-800">📦 Receive Items Back</h3>
+            <p className="text-sm text-gray-500">{order.customerName} — #{order.orderNo ?? order.id?.slice(0, 8).toUpperCase()}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="bg-orange-50 border border-orange-100 rounded-xl px-4 py-3 text-sm text-orange-700">
+            Confirm you have physically received all items back from the delivery agent. The order will be marked as <strong>Returned to Warehouse</strong> and can be reassigned.
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Notes (optional)</label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="e.g. All items intact, ready for next delivery attempt"
+              rows={3}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300 resize-none"
+            />
+          </div>
+        </div>
+        <div className="flex gap-3 px-6 pb-6">
+          <button onClick={onClose} className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm">Cancel</button>
+          <button onClick={handleSubmit} disabled={saving}
+            className="flex-1 bg-red-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-red-600 disabled:opacity-50">
+            {saving ? "Saving..." : "✅ Confirm Received Back"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Reassign Delivery Modal ─────────────────────────────────────────────────
+function ReassignDeliveryModal({ order, deliveryUsers, onClose, onDone, smartRegionMatch }: {
+  order: Order; deliveryUsers: AppUser[];
+  onClose: () => void; onDone: () => void;
+  smartRegionMatch?: boolean;
+}) {
+  const { user } = useAuthStore();
+  const [selectedId, setSelectedId] = useState("");
+  const [saving, setSaving]         = useState(false);
+
+  const orderRegionId = (order as any).regionId as string | undefined;
+  const matched = smartRegionMatch && orderRegionId
+    ? deliveryUsers.filter(u => u.assignedRegions?.includes(orderRegionId))
+    : [];
+  const others = smartRegionMatch && orderRegionId
+    ? deliveryUsers.filter(u => !u.assignedRegions?.includes(orderRegionId))
+    : deliveryUsers;
+
+  const handleReassign = async () => {
+    if (!selectedId) return;
+    setSaving(true);
+    const agent = deliveryUsers.find(u => u.uid === selectedId);
+    try {
+      await updateDoc(doc(db, "orders", order.id!), {
+        deliveryPersonId:   selectedId,
+        deliveryPersonName: agent?.name ?? "",
+        assignedAt:         new Date().toISOString(),
+        assignedBy:         user!.uid,
+        assignedByName:     user!.name,
+        status:             "assigned",
+        currentHolder:      "warehouse",
+      });
+      onDone();
+    } catch (err: any) {
+      alert(err.message || "Failed to reassign.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-800">🔄 Reassign Delivery Agent</h3>
+            <p className="text-sm text-gray-500">{order.customerName}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+        </div>
+        <div className="p-6 space-y-3">
+          {order.deliveryPersonName && (
+            <div className="bg-gray-50 rounded-xl px-4 py-2 text-sm text-gray-600">
+              Currently assigned to: <span className="font-medium">{order.deliveryPersonName}</span>
+            </div>
+          )}
+          {matched.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-green-600 mb-2">✅ Region Match</p>
+              {matched.map(u => (
+                <label key={u.uid} className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer mb-2 ${selectedId === u.uid ? "border-indigo-400 bg-indigo-50" : "border-gray-200 hover:bg-gray-50"}`}>
+                  <input type="radio" name="agent" value={u.uid} checked={selectedId === u.uid} onChange={() => setSelectedId(u.uid)} className="accent-indigo-500" />
+                  <span className="text-sm font-medium text-gray-800">{u.name}</span>
+                </label>
+              ))}
+            </div>
+          )}
+          {others.length > 0 && (
+            <div>
+              {matched.length > 0 && <p className="text-xs font-semibold text-gray-400 mb-2">Other Agents</p>}
+              {others.map(u => (
+                <label key={u.uid} className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer mb-2 ${selectedId === u.uid ? "border-indigo-400 bg-indigo-50" : "border-gray-200 hover:bg-gray-50"}`}>
+                  <input type="radio" name="agent" value={u.uid} checked={selectedId === u.uid} onChange={() => setSelectedId(u.uid)} className="accent-indigo-500" />
+                  <span className="text-sm font-medium text-gray-800">{u.name}</span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="flex gap-3 px-6 pb-6">
+          <button onClick={onClose} className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm">Cancel</button>
+          <button onClick={handleReassign} disabled={saving || !selectedId}
+            className="flex-1 bg-indigo-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-indigo-600 disabled:opacity-50">
+            {saving ? "Reassigning..." : "🚚 Reassign"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 function CancelOrderModal({
   order,
   onClose,
@@ -1566,30 +1879,52 @@ function CancelOrderModal({
           cancellationReason: reason.trim(),
         });
 
-        // ── Reverse the order's full debit on the customer ledger ──
-        // FIX: credit back totalAmount (the full original debit), not just netDebit.
-        // The advance is a physical cash matter tracked in agentCashLedger separately.
-        // The customer ledger must fully reverse: debit was totalAmount → credit totalAmount.
+        // ── Reverse the order's effect on the customer ledger ──────────────
+        // Logic:
+        //   netDebit  = what was actually added to outstandingDue at order creation
+        //             = totalAmount - advancePaid  (advance reduced the due at placement)
+        //   newDue    = currentDue - netDebit  (always clamped to ≥ 0)
+        //
+        // If newDue goes to 0 AND advance > 0:  the advance was physical cash collected
+        // by the field agent.  That cash must be physically returned to the customer.
+        // We flag this with a "refundDue" field on the cancelled order so the admin
+        // and field agent know money needs to go back.
         if (customerSnap.exists()) {
-          const advance     = order.advancePaid ?? 0;
-          const currentDue  = customerSnap.data().outstandingDue ?? 0;
-          // Reverse only what was added to outstandingDue = totalAmount - advance
-          const netDebit    = Math.max(0, order.totalAmount - advance);
-          const newDue      = Math.max(0, Math.round((currentDue - netDebit) * 100) / 100);
+          const advance    = order.advancePaid ?? 0;
+          const currentDue = customerSnap.data().outstandingDue ?? 0;
+          const netDebit   = Math.max(0, order.totalAmount - advance);
+          const rawNewDue  = Math.round((currentDue - netDebit) * 100) / 100;
+          const newDue     = Math.max(0, rawNewDue);
+
+          // If cancelling wipes out more due than exists → advance must be refunded
+          const refundAmount = advance > 0 && rawNewDue < 0
+            ? Math.round(Math.abs(rawNewDue) * 100) / 100
+            : 0;
+
           t.update(customerRef, { outstandingDue: newDue, updatedAt: new Date().toISOString() });
 
-          // Ledger entry: credit the full order total to fully reverse the original debit
+          // Ledger entry — credit only what was actually reversed on outstandingDue
+          const orderRef2 = order.orderNo || (order.id ?? "").slice(0, 8).toUpperCase();
           const ledgerEntryRef = doc(collection(db, "customers", order.customerId, "payments"));
           t.set(ledgerEntryRef, {
             type:          "order_cancelled",
             direction:     "credit",
-            amount:        order.totalAmount,   // full reversal of the original debit
+            amount:        netDebit,      // exactly what was reversed on outstandingDue
             orderId:       order.id,
-            note:          `Order #${(order.id ?? "").slice(0, 8).toUpperCase()} cancelled — ${reason.trim()}`,
+            orderNo:       order.orderNo ?? "",
+            note:          `Order #${orderRef2} cancelled — ${reason.trim()}`,
             createdBy:     user!.uid,
             createdByName: user!.name,
             createdAt:     new Date().toISOString(),
           });
+
+          // Flag refund needed on the order doc so admin / field agent can see it
+          if (refundAmount > 0) {
+            t.update(doc(db, "orders", order.id!), {
+              refundDue:       refundAmount,
+              refundNote:      `Advance of ₹${advance.toFixed(2)} was collected — ₹${refundAmount.toFixed(2)} must be returned to customer`,
+            });
+          }
         }
       });
 
@@ -1641,6 +1976,21 @@ function CancelOrderModal({
             </div>
           ))}
         </div>
+
+        {/* Advance refund notice — only shown when advance was collected */}
+        {(order.advancePaid ?? 0) > 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-5">
+            <p className="text-sm text-amber-800 font-semibold mb-1">
+              💰 Advance was collected — physical refund may be required
+            </p>
+            <p className="text-xs text-amber-700">
+              The field agent collected <strong>₹{(order.advancePaid ?? 0).toFixed(2)}</strong> as advance.
+              {(order.advancePaid ?? 0) >= order.totalAmount
+                ? " Since the full amount was already collected, the entire advance must be returned to the customer."
+                : ` After cancellation, check the customer's remaining balance — if it reaches ₹0, the remaining advance of ₹${Math.max(0, (order.advancePaid ?? 0) - (order.totalAmount - (order.advancePaid ?? 0))).toFixed(2)} must be returned physically.`}
+            </p>
+          </div>
+        )}
 
         <div className="flex gap-3">
           <button
@@ -1894,7 +2244,7 @@ function PartialReturnModal({ order, onClose, onDone }: {
             direction:     "credit",
             amount:        Math.round(returnedTotal * 100) / 100,
             orderId:       order.id,
-            note:          `Return credit for order #${(order.id ?? "").slice(0, 8).toUpperCase()} — ${reason.trim()}`,
+            note:          `Return credit for order #${order.orderNo || (order.id ?? "").slice(0, 8).toUpperCase()} — ${reason.trim()}`,
             createdBy:     user!.uid,
             createdByName: user!.name,
             createdAt:     new Date().toISOString(),

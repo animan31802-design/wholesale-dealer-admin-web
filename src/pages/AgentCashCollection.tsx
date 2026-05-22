@@ -43,6 +43,7 @@ interface CashEntry {
   agentName: string;
   type: "order_advance" | "order_delivery" | "admin_collection" | string; // open string so unknown future types show a fallback label instead of crashing
   orderId?: string;
+  orderNo?: string;  // human-readable yyMMddHHmmss3rand — written by both field agent and delivery
   amount: number;              // always positive
   direction: "in" | "out";    // in = cash with agent, out = handed to admin
   note?: string;
@@ -286,9 +287,12 @@ function HistoryModal({ agent, onClose }: { agent: AppUser; onClose: () => void 
                     </td>
                     <td className="px-5 py-3 text-gray-500 text-xs max-w-[160px]">
                       <p>{e.note || "—"}</p>
-                      {e.orderId && (
-                        <p className="text-gray-400 font-mono">#{e.orderId.slice(0, 8).toUpperCase()}</p>
-                      )}
+                      {(e as any).orderNo
+                        ? <p className="text-gray-400 font-mono">#{(e as any).orderNo}</p>
+                        : e.orderId
+                          ? <p className="text-gray-400 font-mono">#{e.orderId.slice(0, 8).toUpperCase()}</p>
+                          : null
+                      }
                     </td>
                     <td className={`px-5 py-3 text-right font-semibold ${
                       e.direction === "in" ? "text-blue-600" : "text-green-600"
@@ -375,18 +379,18 @@ export default function AgentCashCollection() {
     orders.forEach((o) => {
       if (o.status === "cancelled") return;
 
-      const advance = (o as any).advancePaid ?? 0;
+      const advance   = (o as any).advancePaid ?? 0;
       const collected = o.amountCollected ?? 0;
-      const deliveryCollection = Math.max(0, collected - advance);
 
       // Field agent gets the advance paid at order creation
       if (advance > 0 && o.agentId) {
         map[o.agentId] = (map[o.agentId] ?? 0) + advance;
       }
 
-      // Delivery agent gets what they collected (excluding the advance)
-      if (o.status === "delivered" && o.deliveryPersonId && deliveryCollection > 0) {
-        map[o.deliveryPersonId] = (map[o.deliveryPersonId] ?? 0) + deliveryCollection;
+      // Delivery agent gets the full amount they collected at the door
+      // (advance is separate cash already with the field agent)
+      if (o.status === "delivered" && o.deliveryPersonId && collected > 0) {
+        map[o.deliveryPersonId] = (map[o.deliveryPersonId] ?? 0) + collected;
       }
     });
 
@@ -533,7 +537,7 @@ export default function AgentCashCollection() {
         <p className="text-xs font-semibold text-blue-700 mb-2">ℹ️ How cash tracking works</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-blue-600">
           <div>💼 <strong>Field Agent cash</strong> = Advance amounts collected at order creation</div>
-          <div>🚚 <strong>Delivery Agent cash</strong> = Cash collected at delivery (excluding any advance)</div>
+          <div>🚚 <strong>Delivery Agent cash</strong> = Full amount collected at the door (advance is separate with field agent)</div>
           <div>✅ <strong>Collecting</strong>: Agent hands over cash → Admin enters amount → Balance reduces instantly</div>
           <div>📋 <strong>History</strong>: Full log of every entry and collection for each agent</div>
         </div>

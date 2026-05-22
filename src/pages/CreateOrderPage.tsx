@@ -754,6 +754,21 @@ export default function CreateOrderPage() {
 
         const orderRef = doc(collection(db, "orders"));
         newOrderId     = orderRef.id;
+
+        // Generate human-readable orderNo: yyMMddHHmmss + 3 random digits
+        // Format matches field agent: yyMMddHHmmss3rand — consistent across all apps
+        const now2      = new Date();
+        const pad2      = (n: number) => String(n).padStart(2, "0");
+        const yy        = String(now2.getFullYear()).slice(2);
+        const MM        = pad2(now2.getMonth() + 1);
+        const dd        = pad2(now2.getDate());
+        const HH        = pad2(now2.getHours());
+        const mm        = pad2(now2.getMinutes());
+        const ss        = pad2(now2.getSeconds());
+        const rand3     = String(Math.floor(Math.random() * 900) + 100);
+        const newOrderNo = `${yy}${MM}${dd}${HH}${mm}${ss}${rand3}`;
+        orderPayload.orderNo = newOrderNo;
+
         t.set(orderRef, orderPayload);
 
         // Use the customerSnap already read in the READ PHASE above —
@@ -778,8 +793,9 @@ export default function CreateOrderPage() {
           direction:     "debit",
           amount:        round2(grandTotal),
           orderId:       newOrderId,
+          orderNo:       newOrderNo,
           orderAmount:   round2(grandTotal),
-          note:          "Order #" + newOrderId.slice(0, 8).toUpperCase() + " placed",
+          note:          "Order #" + newOrderNo + " placed",
           createdBy:     user.uid,
           createdByName: user.name,
           createdAt:     now,
@@ -792,8 +808,9 @@ export default function CreateOrderPage() {
             direction:     "credit",
             amount:        round2(paid),
             orderId:       newOrderId,
+            orderNo:       newOrderNo,
             paymentMode:   paymentMode,
-            note:          "Advance collected at order #" + newOrderId.slice(0, 8).toUpperCase() + " (" + paymentMode + ")",
+            note:          "Advance collected at order #" + newOrderNo + " (" + paymentMode + ")",
             createdBy:     user.uid,
             createdByName: user.name,
             createdAt:     now,
@@ -803,7 +820,7 @@ export default function CreateOrderPage() {
 
       // Success
       delete draftStore[customer.id!];
-      setLastOrderId(newOrderId);
+      setLastOrderId(newOrderNo);  // show human-readable ref in success toast
 
       // ── Sync field agent cash ledger ──────────────────────────────
       // FIX: Always seed the summary doc (merge) so admin sees agent even on
@@ -829,9 +846,10 @@ export default function CreateOrderPage() {
                 agentName:     user.name,
                 type:          "order_advance",
                 orderId:       newOrderId,
+                orderNo:       newOrderNo,
                 amount:        paid,
                 direction:     "in",
-                note:          `Advance collected for order #${newOrderId.slice(0, 8).toUpperCase()} (${customer.shopName})`,
+                note:          `Advance collected for order #${newOrderNo} (${customer.shopName})`,
                 createdBy:     user.uid,
                 createdByName: user.name,
                 createdAt:     new Date().toISOString(),

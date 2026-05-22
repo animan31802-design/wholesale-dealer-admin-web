@@ -109,9 +109,12 @@ export default function Layout() {
       <div className="w-60 bg-gray-900 text-white flex flex-col flex-shrink-0">
         {/* Brand */}
         <div className="p-5 border-b border-gray-700">
-          <h1 className="text-lg font-bold text-orange-400">
-            🏬 Dealer Admin
-          </h1>
+		  <div className="flex items-center gap-3 mb-1">
+			<img src="/ptm_logo.jpeg" alt="Logo" className="w-9 h-9 object-contain rounded-lg" />
+			<h1 className="text-lg font-bold text-orange-400">
+			  Dealer Admin
+			</h1>
+		  </div>
 
           <p className="text-xs text-gray-400 mt-1">{user?.name}</p>
 

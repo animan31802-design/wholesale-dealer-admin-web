@@ -96,8 +96,20 @@ export type OrderStatus =
   | "packed"
   | "assigned"
   | "out_for_delivery"
+  | "attempted"
+  | "returned_to_warehouse"
   | "delivered"
   | "cancelled";
+
+export interface DeliveryAttempt {
+  attemptedAt: string;
+  agentId: string;
+  agentName: string;
+  reason: "shop_closed" | "customer_unavailable" | "refused_delivery" | "other";
+  notes: string;
+  deliveryLat?: number;
+  deliveryLng?: number;
+}
 
 export type InvoiceType = "gst" | "estimate";
 export type BillingMode = "with_due" | "without_due";
@@ -133,7 +145,13 @@ export interface Order {
   invoicedAt?: string;
   billingMode?: BillingMode;
   voidedInvoices?: Array<{ invoiceNumber: string; voidedAt: string; voidedBy: string; voidedByName: string }>;
-  signatureUrl?: string;
+  deliveryAttempts?: DeliveryAttempt[];  // history of every failed delivery attempt
+  currentHolder?: "delivery_agent" | "warehouse"; // where items are RIGHT NOW
+  returnedToWarehouseAt?: string;        // when items came back to warehouse
+  returnedToWarehouseBy?: string;
+  returnedToWarehouseByName?: string;
+  collectedAt?: string;                  // when delivery agent confirmed collection
+  outForDeliveryAt?: string;
   signature?: string;
   signatureCollected?: boolean;
   billWithAgent?: boolean;
