@@ -194,8 +194,12 @@ function buildInvoiceHTML(params: {
   const balanceOnDelivery = Math.max(0, round2(totalPayable - advancePaid));
 
   const addrParts = [biz?.address, biz?.city, biz?.state, biz?.pincode].filter(Boolean).join(", ");
-  const dateStr   = new Date(order.createdAt).toLocaleDateString("en-IN", {
+  const invoiceDateRaw = order.invoicedAt ?? order.createdAt;
+  const invoiceDateObj = new Date(invoiceDateRaw);
+  const dateStr = invoiceDateObj.toLocaleDateString("en-IN", {
     day: "2-digit", month: "2-digit", year: "numeric",
+  }) + " " + invoiceDateObj.toLocaleTimeString("en-IN", {
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
   });
   // Words line shows the actual amount still owed — mirrors QR amount logic
   const amountForWords = balanceOnDelivery > 0 ? balanceOnDelivery : totalPayable;
@@ -476,7 +480,10 @@ function buildInvoiceHTML(params: {
       </td>
 
       <td colspan="6" style="${c}" class="center">
-        <div class="big">${esc(biz?.businessName) || "PTM MILL"}</div>
+        <div style="display:flex;align-items:center;justify-content:center;gap:10px;">
+          <img src="/ptm_logo.jpeg" style="width:48px;height:48px;object-fit:contain;" />
+          <div class="big">${esc(biz?.businessName) || "PTM MILL"}</div>
+        </div>
 
         <div style="margin-top:8px;font-size:10px;">
           ${esc(addrParts)}
@@ -502,7 +509,10 @@ function buildInvoiceHTML(params: {
       </td>
 
       <td colspan="2" style="${c}" class="center">
-        <div class="big">${esc(biz?.businessName) || "PTM MILL"}</div>
+        <div style="display:flex;align-items:center;justify-content:center;gap:10px;">
+          <img src="/ptm_logo.jpeg" style="width:48px;height:48px;object-fit:contain;" />
+          <div class="big">${esc(biz?.businessName) || "PTM MILL"}</div>
+        </div>
 
         <div style="margin-top:8px;font-size:10px;">
           ${esc(addrParts)}
@@ -559,14 +569,8 @@ isGST
       </div>
 
       ${
-        order.customerPhone
-          ? `<div style="margin-top:5px;">Ph: ${esc(order.customerPhone)}</div>`
-          : ""
-      }
-
-      ${
-        customer?.gstin
-          ? `<div style="margin-top:5px;">GSTIN: ${esc(customer.gstin)}</div>`
+        order.customerArea
+          ? `<div style="margin-top:4px;font-size:11px;color:#444;">Area: ${esc(order.customerArea)}</div>`
           : ""
       }
 
@@ -635,6 +639,12 @@ isGST
       <div style="margin-top:5px;">
         ${esc(order.customerAddress) || ""}
       </div>
+
+      ${
+        order.customerArea
+          ? `<div style="margin-top:4px;font-size:11px;color:#444;">Area: ${esc(order.customerArea)}</div>`
+          : ""
+      }
 
       ${
         order.customerPhone

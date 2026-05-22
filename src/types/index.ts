@@ -120,6 +120,7 @@ export interface Order {
   customerId: string;
   customerName: string;
   customerAddress: string;
+  customerArea?: string;       // copied from customer.area at order creation
   customerPhone?: string;
   customerGstin?: string;    // written by web and (fixed) mobile at order creation
   customerLat?: number;

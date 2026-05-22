@@ -257,7 +257,7 @@ function GSTReport({ orders }: { orders: Order[] }) {
   const { from: df, to: dt } = thisMonthRange();
   const [from, setFrom] = useState(df);
   const [to,   setTo]   = useState(dt);
-  const [view, setView] = useState<"b2c" | "rate" | "hsn" | "tax_invoice" | "bill_of_supply">("b2c");
+  const [view, setView] = useState<"b2c" | "rate" | "hsn" | "tax_invoice" | "estimate">("b2c");
   const [b2cPage, setB2cPage] = useState(1);
   const B2C_PER_PAGE = 25;
 
@@ -273,7 +273,7 @@ function GSTReport({ orders }: { orders: Order[] }) {
 
     // Split purely on the invoiceType the user chose at generation time.
     // Tax Invoice (gst)     → used for IT/GST filing, shows CGST+SGST breakdown.
-    // Bill of Supply (estimate) → not submitted for IT filing, no tax breakdown shown.
+    // Estimate → not submitted for IT filing, no tax breakdown shown.
     const gst = orders.filter(o => inRange(o) && o.invoiceType === "gst");
     const est = orders.filter(o => inRange(o) && o.invoiceType === "estimate");
 
@@ -435,7 +435,7 @@ function GSTReport({ orders }: { orders: Order[] }) {
             ["rate",          "📊 Rate-wise"],
             ["hsn",           "🔢 HSN-wise"],
             ["tax_invoice",   "🧾 Tax Invoice"],
-            ["bill_of_supply","📋 Bill of Supply"],
+            ["estimate","📋 Estimate"],
           ] as const).map(([v, label]) => (
             <button key={v} onClick={() => { setView(v as any); setB2cPage(1); }}
               className={`px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
@@ -591,15 +591,15 @@ function GSTReport({ orders }: { orders: Order[] }) {
         );
       })()}
 
-      {/* Bill of Supply View — unregistered / exempt customers */}
-      {view === "bill_of_supply" && (() => {
+      {/* Estimate View — unregistered / exempt customers */}
+      {view === "estimate" && (() => {
         const lines = filteredEstimate;
         const totGrand = lines.reduce((s, o) => s + o.totalAmount, 0);
         return (
           <div className="space-y-3">
             <div className="flex gap-4 text-sm">
               <div className="bg-green-50 border border-green-100 rounded-xl px-4 py-3">
-                <p className="text-xs text-gray-400">Bill of Supply Count</p>
+                <p className="text-xs text-gray-400">Estimate Count</p>
                 <p className="text-xl font-bold text-green-700">{lines.length}</p>
               </div>
               <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3">

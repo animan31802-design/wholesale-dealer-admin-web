@@ -948,7 +948,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
                       className={`p-3 rounded-xl border-2 text-left transition-all ${
                         invoiceType === t ? "border-orange-500 bg-orange-50" : "border-gray-200 hover:border-gray-300"
                       }`}>
-                      <p className="font-semibold text-sm">{t === "gst" ? "🧾 Tax Invoice" : "📄 Bill of Supply"}</p>
+                      <p className="font-semibold text-sm">{t === "gst" ? "🧾 Tax Invoice" : "📄 Estimate"}</p>
                       <p className="text-xs text-gray-400 mt-0.5">{t === "gst" ? "CGST + SGST, for GST filing" : "No GST breakdown, not for IT filing"}</p>
                     </button>
                   ))}
@@ -1046,7 +1046,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
                       className={`p-3 rounded-xl border-2 text-left transition-all ${
                         invoiceType === t ? "border-orange-500 bg-orange-50" : "border-gray-200 hover:border-gray-300"
                       }`}>
-                      <p className="font-semibold text-sm">{t === "gst" ? "🧾 Tax Invoice" : "📄 Bill of Supply"}</p>
+                      <p className="font-semibold text-sm">{t === "gst" ? "🧾 Tax Invoice" : "📄 Estimate"}</p>
                       <p className="text-xs text-gray-400 mt-0.5">{t === "gst" ? "CGST + SGST, for GST filing" : "No GST breakdown"}</p>
                     </button>
                   ))}
