@@ -661,6 +661,7 @@ export default function CreateOrderPage() {
 
     try {
       let newOrderId = "";
+      let newOrderNo = "";
 
       await runTransaction(db, async (t) => {
         // ── READ PHASE: ALL reads must come before any writes ─────
@@ -766,7 +767,7 @@ export default function CreateOrderPage() {
         const mm        = pad2(now2.getMinutes());
         const ss        = pad2(now2.getSeconds());
         const rand3     = String(Math.floor(Math.random() * 900) + 100);
-        const newOrderNo = `${yy}${MM}${dd}${HH}${mm}${ss}${rand3}`;
+        newOrderNo = `${yy}${MM}${dd}${HH}${mm}${ss}${rand3}`;
         orderPayload.orderNo = newOrderNo;
 
         t.set(orderRef, orderPayload);
