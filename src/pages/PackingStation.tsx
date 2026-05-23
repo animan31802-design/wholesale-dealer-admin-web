@@ -187,7 +187,7 @@ export default function PackingStation() {
   }
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
+    <div className="p-3 md:p-6 max-w-4xl mx-auto">
 
       {/* Header */}
       <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
@@ -298,7 +298,7 @@ export default function PackingStation() {
             <div key={order.id}
               className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
               {/* Order header */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div className="flex items-start justify-between px-4 md:px-6 py-4 border-b border-gray-100 gap-2">
                 <div className="flex items-center gap-3">
                   <span className="w-7 h-7 rounded-full bg-orange-100 text-orange-600 text-xs font-bold flex items-center justify-center">
                     {idx + 1}
@@ -329,8 +329,8 @@ export default function PackingStation() {
               </div>
 
               {/* Order items */}
-              <div className="px-6 py-4">
-                <table className="w-full text-sm">
+              <div className="px-3 md:px-6 py-4 overflow-x-auto">
+                <table className="w-full text-sm min-w-[280px]">
                   <thead>
                     <tr className="text-xs text-gray-400 border-b border-gray-100">
                       <th className="text-left pb-2">Product</th>
@@ -356,7 +356,7 @@ export default function PackingStation() {
               </div>
 
               {/* Footer */}
-              <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
+              <div className="px-3 md:px-6 py-4 bg-gray-50 border-t border-gray-100 flex items-center justify-between flex-wrap gap-3">
                 <div className="text-xs text-gray-400">
                   {order.items.length} product{order.items.length !== 1 ? "s" : ""} ·{" "}
                   {order.items.reduce((s, i) => s + i.quantity, 0)} units
@@ -364,7 +364,7 @@ export default function PackingStation() {
                 <button
                   onClick={() => markPacked(order)}
                   disabled={confirmingId === order.id}
-                  className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold px-6 py-2.5 rounded-xl text-sm transition-all flex items-center gap-2"
+                  className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold px-4 py-2.5 rounded-xl text-sm transition-all flex items-center gap-2 w-full sm:w-auto justify-center"
                 >
                   {confirmingId === order.id ? (
                     <>

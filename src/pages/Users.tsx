@@ -180,7 +180,7 @@ export default function Users() {
   const packingStaff   = searchedUsers.filter((u) => u.role === "packing_staff");
   const admins         = searchedUsers.filter((u) => u.role === "admin");
 
-  // Reusable user group table with optional region column
+  // Reusable user group — cards on mobile, table on md+
   const UserTable = ({
     title, userList, showRegions,
   }: { title: string; userList: AppUser[]; showRegions: boolean }) => (
@@ -188,94 +188,140 @@ export default function Users() {
       <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
         {title} ({userList.length})
       </h3>
-      <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-gray-500 text-left">
-            <tr>
-              <th className="px-5 py-4">Name</th>
-              <th className="px-5 py-4">Email</th>
-              <th className="px-5 py-4">Phone</th>
-              <th className="px-5 py-4">Status</th>
-              {showRegions && <th className="px-5 py-4">Assigned Regions</th>}
-              <th className="px-5 py-4">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {userList.map((user) => (
-              <tr key={user.uid} className="hover:bg-gray-50">
-                <td className="px-5 py-4 font-medium text-gray-800">{user.name}</td>
-                <td className="px-5 py-4 text-gray-600">{user.email}</td>
-                <td className="px-5 py-4 text-gray-600">{user.phone || "—"}</td>
-                <td className="px-5 py-4">
-                  <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-                    user.isActive === false
-                      ? "bg-red-100 text-red-600"
-                      : "bg-green-100 text-green-600"
-                  }`}>
-                    {user.isActive === false ? "Inactive" : "Active"}
-                  </span>
-                </td>
-                {showRegions && (
-                  <td className="px-5 py-4">
-                    {getRegionTags(user) ? (
-                      <div className="flex flex-wrap gap-1">
-                        {getRegionTags(user)!.map((name, i) => (
-                          <span key={i} className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full">
-                            {name}
-                          </span>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="text-gray-400 text-xs italic">No regions assigned</span>
-                    )}
-                  </td>
-                )}
-                <td className="px-5 py-4">
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleEditUser(user)}
-                      className="text-xs bg-gray-50 text-gray-600 px-3 py-1 rounded-lg hover:bg-gray-100 border border-gray-200"
-                    >
-                      ✏️ Edit
-                    </button>
-                    {showRegions && (
-                      <button
-                        onClick={() => { setSelectedAgent(user); setShowRegionModal(true); }}
-                        className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-lg hover:bg-blue-100"
-                      >
-                        🗂️ Regions
-                      </button>
-                    )}
-                    <button
-                      onClick={() => handleToggleActive(user)}
-                      className={`text-xs px-3 py-1 rounded-lg border transition-all ${
-                        user.isActive === false
-                          ? "bg-green-50 text-green-600 border-green-200 hover:bg-green-100"
-                          : "bg-red-50 text-red-500 border-red-200 hover:bg-red-100"
-                      }`}
-                    >
-                      {user.isActive === false ? "Activate" : "Deactivate"}
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {userList.length === 0 && (
-              <tr>
-                <td colSpan={showRegions ? 6 : 5} className="text-center py-8 text-gray-400">
-                  No {title.toLowerCase()} yet.
-                </td>
-              </tr>
+
+      {/* ── Mobile cards ── */}
+      <div className="md:hidden space-y-3">
+        {userList.length === 0 && (
+          <div className="bg-white rounded-xl p-6 text-center text-gray-400 text-sm shadow-sm">
+            No {title.toLowerCase()} yet.
+          </div>
+        )}
+        {userList.map((user) => (
+          <div key={user.uid} className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+            <div className="flex items-start justify-between mb-2">
+              <div>
+                <p className="font-semibold text-gray-800">{user.name}</p>
+                <p className="text-xs text-gray-500 mt-0.5">{user.email}</p>
+                {user.phone && <p className="text-xs text-gray-400">{user.phone}</p>}
+              </div>
+              <span className={`text-xs px-2 py-1 rounded-full font-medium flex-shrink-0 ${
+                user.isActive === false ? "bg-red-100 text-red-600" : "bg-green-100 text-green-600"
+              }`}>
+                {user.isActive === false ? "Inactive" : "Active"}
+              </span>
+            </div>
+            {showRegions && getRegionTags(user) && (
+              <div className="flex flex-wrap gap-1 mb-3">
+                {getRegionTags(user)!.map((name, i) => (
+                  <span key={i} className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full">{name}</span>
+                ))}
+              </div>
             )}
-          </tbody>
-        </table>
+            <div className="flex gap-2 flex-wrap mt-2">
+              <button onClick={() => handleEditUser(user)}
+                className="text-xs bg-gray-50 text-gray-600 px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-100">
+                ✏️ Edit
+              </button>
+              {showRegions && (
+                <button onClick={() => { setSelectedAgent(user); setShowRegionModal(true); }}
+                  className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-100">
+                  🗂️ Regions
+                </button>
+              )}
+              <button onClick={() => handleToggleActive(user)}
+                className={`text-xs px-3 py-1.5 rounded-lg border transition-all ${
+                  user.isActive === false
+                    ? "bg-green-50 text-green-600 border-green-200 hover:bg-green-100"
+                    : "bg-red-50 text-red-500 border-red-200 hover:bg-red-100"
+                }`}>
+                {user.isActive === false ? "Activate" : "Deactivate"}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Desktop table ── */}
+      <div className="hidden md:block bg-white rounded-xl shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm min-w-[600px]">
+            <thead className="bg-gray-50 text-gray-500 text-left">
+              <tr>
+                <th className="px-5 py-4">Name</th>
+                <th className="px-5 py-4">Email</th>
+                <th className="px-5 py-4">Phone</th>
+                <th className="px-5 py-4">Status</th>
+                {showRegions && <th className="px-5 py-4">Assigned Regions</th>}
+                <th className="px-5 py-4">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {userList.map((user) => (
+                <tr key={user.uid} className="hover:bg-gray-50">
+                  <td className="px-5 py-4 font-medium text-gray-800">{user.name}</td>
+                  <td className="px-5 py-4 text-gray-600">{user.email}</td>
+                  <td className="px-5 py-4 text-gray-600">{user.phone || "—"}</td>
+                  <td className="px-5 py-4">
+                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                      user.isActive === false ? "bg-red-100 text-red-600" : "bg-green-100 text-green-600"
+                    }`}>
+                      {user.isActive === false ? "Inactive" : "Active"}
+                    </span>
+                  </td>
+                  {showRegions && (
+                    <td className="px-5 py-4">
+                      {getRegionTags(user) ? (
+                        <div className="flex flex-wrap gap-1">
+                          {getRegionTags(user)!.map((name, i) => (
+                            <span key={i} className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full">{name}</span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-gray-400 text-xs italic">No regions assigned</span>
+                      )}
+                    </td>
+                  )}
+                  <td className="px-5 py-4">
+                    <div className="flex gap-2">
+                      <button onClick={() => handleEditUser(user)}
+                        className="text-xs bg-gray-50 text-gray-600 px-3 py-1 rounded-lg hover:bg-gray-100 border border-gray-200">
+                        ✏️ Edit
+                      </button>
+                      {showRegions && (
+                        <button onClick={() => { setSelectedAgent(user); setShowRegionModal(true); }}
+                          className="text-xs bg-blue-50 text-blue-600 px-3 py-1 rounded-lg hover:bg-blue-100">
+                          🗂️ Regions
+                        </button>
+                      )}
+                      <button onClick={() => handleToggleActive(user)}
+                        className={`text-xs px-3 py-1 rounded-lg border transition-all ${
+                          user.isActive === false
+                            ? "bg-green-50 text-green-600 border-green-200 hover:bg-green-100"
+                            : "bg-red-50 text-red-500 border-red-200 hover:bg-red-100"
+                        }`}>
+                        {user.isActive === false ? "Activate" : "Deactivate"}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {userList.length === 0 && (
+                <tr>
+                  <td colSpan={showRegions ? 6 : 5} className="text-center py-8 text-gray-400">
+                    No {title.toLowerCase()} yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
 
   return (
-    <div className="p-8">
-      <div className="flex items-center justify-between mb-6">
+    <div className="p-3 md:p-8">
+      <div className="flex items-start justify-between mb-4 gap-3 flex-wrap">
         <div>
           <h2 className="text-2xl font-bold text-gray-800">Users</h2>
           <p className="text-sm text-gray-400 mt-0.5">{users.length} users</p>
@@ -307,8 +353,8 @@ export default function Users() {
 
       {/* Add User Modal */}
       {showForm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3">
+          <div className="bg-white rounded-2xl p-4 md:p-6 w-full max-w-md shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-800">Add New User</h3>
               <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600">✕</button>
@@ -355,8 +401,8 @@ export default function Users() {
 
       {/* Edit User Modal */}
       {editUser && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3">
+          <div className="bg-white rounded-2xl p-4 md:p-6 w-full max-w-md shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-800">Edit User</h3>
               <button onClick={() => setEditUser(null)} className="text-gray-400 hover:text-gray-600">✕</button>
@@ -409,8 +455,8 @@ export default function Users() {
 
       {/* Assign / Manage Regions Modal */}
       {showRegionModal && selectedAgent && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3">
+          <div className="bg-white rounded-2xl p-4 md:p-6 w-full max-w-md shadow-2xl">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-lg font-semibold text-gray-800">Manage Regions</h3>
               <button onClick={() => setShowRegionModal(false)} className="text-gray-400 hover:text-gray-600">✕</button>

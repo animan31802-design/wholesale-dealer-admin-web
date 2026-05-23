@@ -111,9 +111,9 @@ export default function Dashboard() {
   );
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="p-3 md:p-6 max-w-7xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-start justify-between mb-4 gap-3 flex-wrap">
         <div>
           <h2 className="text-2xl font-bold text-gray-800">Dashboard</h2>
           <p className="text-sm text-gray-400 mt-0.5">{new Date().toLocaleDateString("en-IN", { weekday:"long", day:"numeric", month:"long", year:"numeric" })}</p>
@@ -185,7 +185,7 @@ export default function Dashboard() {
 
       {/* Today stats */}
       <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">Today</p>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
         {[
           { label:"Orders Today",     value: todayOrders.length,  icon:"📦", bg:"bg-orange-100" },
           { label:"Revenue Today",    value: `₹${todayOrders.reduce((s,o) => s+o.totalAmount,0).toLocaleString("en-IN",{maximumFractionDigits:0})}`, icon:"💰", bg:"bg-green-100" },
@@ -203,7 +203,7 @@ export default function Dashboard() {
       </div>
 
       {/* Revenue chart + Top products */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-4">
         {/* Revenue chart */}
         <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm p-5">
           <div className="flex items-center justify-between mb-4">
@@ -245,7 +245,7 @@ export default function Dashboard() {
                       <span className={`text-xs font-bold w-5 ${i === 0 ? "text-yellow-500" : i === 1 ? "text-gray-400" : i === 2 ? "text-orange-400" : "text-gray-300"}`}>
                         #{i+1}
                       </span>
-                      <span className="text-xs text-gray-700 font-medium truncate max-w-[110px]">{p.name}</span>
+                      <span className="text-xs text-gray-700 font-medium truncate max-w-[80px] sm:max-w-[140px]">{p.name}</span>
                     </div>
                     <span className="text-xs font-semibold text-gray-800">₹{p.revenue.toLocaleString("en-IN",{maximumFractionDigits:0})}</span>
                   </div>
@@ -282,7 +282,8 @@ export default function Dashboard() {
       {/* Recent orders */}
       <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">Recent Orders</p>
       <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
-        <table className="w-full text-sm">
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm min-w-[520px]">
           <thead className="bg-gray-50 text-gray-400 text-left text-xs uppercase tracking-wide">
             <tr>
               <th className="px-5 py-3">Customer</th>
@@ -304,6 +305,7 @@ export default function Dashboard() {
             ))}
           </tbody>
         </table>
+        </div>
         {orders.length === 0 && <div className="text-center py-12 text-gray-400"><p className="text-3xl mb-2">📭</p><p>No orders yet.</p></div>}
       </div>
 

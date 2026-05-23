@@ -280,15 +280,15 @@ export default function Orders() {
   );
 
   return (
-    <div className="p-6">
+    <div className="p-3 md:p-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 gap-3">
         <h2 className="text-2xl font-bold text-gray-800">Orders</h2>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           {user?.role === "admin" && (
             <button
               onClick={() => navigate("/create-order")}
-              className="flex items-center gap-2 bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-orange-600 transition-all shadow-sm"
+              className="flex items-center gap-2 bg-orange-500 text-white px-3 py-1.5 rounded-lg text-sm font-semibold hover:bg-orange-600 transition-all shadow-sm"
             >
               <span className="text-base leading-none">＋</span> New Order
             </button>
@@ -298,41 +298,39 @@ export default function Orders() {
               Clear filters
             </button>
           )}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleExcelExport}
-              className="flex items-center gap-1.5 border border-gray-300 text-gray-600 px-3 py-1.5 rounded-lg text-xs hover:bg-gray-50"
-            >
-              ⬇️ Export Excel
-            </button>
-            <button
-              onClick={() => setSmartRegionMatch(p => !p)}
-              title={smartRegionMatch ? "Smart region matching ON — matched delivery agents highlighted in assign modal" : "Smart region matching OFF"}
-              className={`flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
-                smartRegionMatch
-                  ? "bg-green-50 border-green-300 text-green-700"
-                  : "bg-gray-50 border-gray-200 text-gray-400"
-              }`}
-            >
-              <span className={`w-1.5 h-1.5 rounded-full inline-block ${smartRegionMatch ? "bg-green-500" : "bg-gray-300"}`} />
-              Region Match
-            </button>
-            <button
-              onClick={() => setSoundEnabled(p => !p)}
-              title={soundEnabled ? "Mute order alerts" : "Enable order alerts"}
-              className={`text-lg transition-all ${soundEnabled ? "opacity-100" : "opacity-30"}`}
-            >
-              {soundEnabled ? "🔔" : "🔕"}
-            </button>
-            <div className="flex items-center gap-2 text-xs text-gray-400">
-              <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse inline-block" />
-              Live
-            </div>
+          <button
+            onClick={handleExcelExport}
+            className="flex items-center gap-1.5 border border-gray-300 text-gray-600 px-3 py-1.5 rounded-lg text-xs hover:bg-gray-50"
+          >
+            ⬇️ Excel
+          </button>
+          <button
+            onClick={() => setSmartRegionMatch(p => !p)}
+            title={smartRegionMatch ? "Smart region matching ON" : "Smart region matching OFF"}
+            className={`flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
+              smartRegionMatch
+                ? "bg-green-50 border-green-300 text-green-700"
+                : "bg-gray-50 border-gray-200 text-gray-400"
+            }`}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full inline-block ${smartRegionMatch ? "bg-green-500" : "bg-gray-300"}`} />
+            Region
+          </button>
+          <button
+            onClick={() => setSoundEnabled(p => !p)}
+            title={soundEnabled ? "Mute order alerts" : "Enable order alerts"}
+            className={`text-lg transition-all ${soundEnabled ? "opacity-100" : "opacity-30"}`}
+          >
+            {soundEnabled ? "🔔" : "🔕"}
+          </button>
+          <div className="flex items-center gap-1.5 text-xs text-gray-400">
+            <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse inline-block" />
+            Live
           </div>
         </div>
       </div>
 
-      <div className="flex gap-1 mb-4 overflow-x-auto pb-1">
+      <div className="flex gap-1 mb-4 overflow-x-auto pb-1 -mx-3 px-3 md:mx-0 md:px-0">
         {(["all","pending","packed","assigned","out_for_delivery","attempted","returned_to_warehouse","delivered","cancelled"] as const).map((tab) => (
           <button key={tab} onClick={() => setActiveTab(tab)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
@@ -460,8 +458,9 @@ export default function Orders() {
         </div>
       )}
 
-      <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-        <table className="w-full text-sm">
+      <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm min-w-[680px]">
           <thead className="bg-gray-50 text-gray-500 text-left text-xs uppercase tracking-wide">
             <tr>
               <th className="px-3 py-4 w-10">
@@ -593,6 +592,7 @@ export default function Orders() {
             ))}
           </tbody>
         </table>
+        </div>
         {filtered.length === 0 && (
           <div className="text-center py-12 text-gray-400">
             {hasActiveFilters ? "No orders match your filters." : "No orders in this category."}
@@ -696,6 +696,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
 
   const [customerData, setCustomerData] = useState<any>(null);
   const [pdfUrl, setPdfUrl]             = useState<string | null>(null);
+  const [invoiceHtml, setInvoiceHtml]   = useState<string | null>(null);
   const [loadingDue, setLoadingDue]     = useState(false);
   const [generating, setGenerating]     = useState(false);
   const [regenReason, setRegenReason]   = useState("");
@@ -762,12 +763,13 @@ function InvoiceModal({ order, onClose, isAdmin }: {
     if (pdfUrl) URL.revokeObjectURL(pdfUrl);
     try {
       const orderWithMeta = { ...order, invoiceNumber: invNum, invoiceType: invType, billingMode: billMode };
-      const pdf = await buildInvoicePDF(orderWithMeta as any, customerData || undefined, {
+      const { pdf, html } = await buildInvoicePDF(orderWithMeta as any, customerData || undefined, {
         invoiceType: invType,
         billingMode: billMode,
         customerDue: billMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
         qrMode: qrModeVal,
       });
+      setInvoiceHtml(html);
       setPdfUrl(URL.createObjectURL(pdf.output("blob")));
       setModalState("preview");
     } finally {
@@ -850,7 +852,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
   const handleDownload = async () => {
     const prefix = invoiceType === "gst" ? "invoice" : "estimate";
     const orderWithMeta = { ...order, invoiceNumber, invoiceType, billingMode };
-    const pdf = await buildInvoicePDF(orderWithMeta as any, customerData || undefined, {
+    const { pdf } = await buildInvoicePDF(orderWithMeta as any, customerData || undefined, {
       invoiceType,
       billingMode,
       customerDue: billingMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
@@ -863,7 +865,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
     try {
       const prefix = invoiceType === "gst" ? "invoice" : "estimate";
       const orderWithMeta = { ...order, invoiceNumber, invoiceType, billingMode };
-      const pdf = await buildInvoicePDF(orderWithMeta as any, customerData || undefined, {
+      const { pdf } = await buildInvoicePDF(orderWithMeta as any, customerData || undefined, {
         invoiceType,
         billingMode,
         customerDue: billingMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
@@ -888,9 +890,9 @@ function InvoiceModal({ order, onClose, isAdmin }: {
   const isWide = modalState === "preview";
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-0 md:p-4">
       {/* Modal is ALWAYS full size — never resizes, preventing page reflow glitch */}
-      <div className="relative bg-white rounded-2xl shadow-2xl flex flex-col w-full max-w-4xl h-[90vh]">
+      <div className="relative bg-white rounded-none md:rounded-2xl shadow-2xl flex flex-col w-full max-w-4xl h-screen md:h-[90vh]">
 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
@@ -1128,10 +1130,26 @@ function InvoiceModal({ order, onClose, isAdmin }: {
         )}
 
         {/* ── PREVIEW STATE — PDF ready ── */}
-        {modalState === "preview" && pdfUrl && (
+        {modalState === "preview" && (pdfUrl || invoiceHtml) && (
           <>
             <div className="flex-1 overflow-hidden">
-              <iframe src={pdfUrl} className="w-full h-full border-0" title="Invoice Preview" />
+              {/* Mobile: render HTML directly via srcdoc — blob PDF URLs don't work on iOS/Android */}
+              {invoiceHtml && (
+                <iframe
+                  srcDoc={invoiceHtml}
+                  className="w-full h-full border-0 md:hidden"
+                  title="Invoice Preview"
+                  sandbox="allow-same-origin"
+                />
+              )}
+              {/* Desktop: use blob PDF URL for proper PDF rendering */}
+              {pdfUrl && (
+                <iframe
+                  src={pdfUrl}
+                  className="w-full h-full border-0 hidden md:block"
+                  title="Invoice Preview"
+                />
+              )}
             </div>
             <div className="flex gap-2 p-4 border-t border-gray-100 flex-shrink-0 flex-wrap">
               <button onClick={onClose}
@@ -1346,10 +1364,10 @@ export function OrderDetailPanel({
       <div className="fixed inset-0 bg-black/40 z-40" onClick={onClose} />
 
       {/* Slide-in panel */}
-      <div className="fixed right-0 top-0 h-full w-full max-w-xl bg-white shadow-2xl z-50 flex flex-col overflow-hidden">
+      <div className="fixed right-0 top-0 h-full w-full md:max-w-xl bg-white shadow-2xl z-50 flex flex-col overflow-hidden">
 
         {/* Header */}
-        <div className="flex items-start justify-between px-6 py-4 border-b border-gray-100 bg-gray-50 flex-shrink-0">
+        <div className="flex items-start justify-between px-4 md:px-6 py-4 border-b border-gray-100 bg-gray-50 flex-shrink-0 gap-2">
           <div>
             <h3 className="text-lg font-bold text-gray-800">{order.customerName}</h3>
             {/* FIX: show orderNo written by mobile app; fall back to short Firestore ID */}

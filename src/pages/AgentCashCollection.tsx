@@ -258,7 +258,7 @@ function HistoryModal({ agent, onClose }: { agent: AppUser; onClose: () => void 
               <p>No transactions yet</p>
             </div>
           ) : (
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto"><table className="w-full text-sm min-w-[480px]">
               <thead className="bg-gray-50 text-gray-400 text-xs uppercase tracking-wide sticky top-0">
                 <tr>
                   <th className="px-5 py-3 text-left">Date</th>
@@ -302,7 +302,7 @@ function HistoryModal({ agent, onClose }: { agent: AppUser; onClose: () => void 
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           )}
         </div>
 
@@ -492,9 +492,9 @@ export default function AgentCashCollection() {
   }
 
   return (
-    <div className="p-6 max-w-5xl mx-auto">
+    <div className="p-4 md:p-6 max-w-5xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
         <div>
           <h2 className="text-2xl font-bold text-gray-800">Agent Cash Collection</h2>
           <p className="text-sm text-gray-400 mt-0.5">

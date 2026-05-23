@@ -204,7 +204,7 @@ export default function FinanceReports() {
   ];
 
   if (loading) return (
-    <div className="p-8 flex items-center gap-3 text-gray-400">
+    <div className="p-4 flex items-center gap-3 text-gray-400">
       <span className="animate-spin text-xl">⏳</span> Loading financial data...
     </div>
   );
@@ -217,7 +217,7 @@ export default function FinanceReports() {
     .reduce((s, o) => s + Math.max(0, o.totalAmount - (o.amountCollected ?? 0)), 0);
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="p-3 md:p-6 max-w-7xl mx-auto">
       {/* Header */}
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-gray-800">💰 Finance Reports</h2>
@@ -273,7 +273,7 @@ function GSTReport({ orders }: { orders: Order[] }) {
 
     // Split purely on the invoiceType the user chose at generation time.
     // Tax Invoice (gst)     → used for IT/GST filing, shows CGST+SGST breakdown.
-    // Estimate → not submitted for IT filing, no tax breakdown shown.
+    // Estimate (estimate) → not submitted for IT filing, no tax breakdown shown.
     const gst = orders.filter(o => inRange(o) && o.invoiceType === "gst");
     const est = orders.filter(o => inRange(o) && o.invoiceType === "estimate");
 
@@ -451,7 +451,7 @@ function GSTReport({ orders }: { orders: Order[] }) {
       {/* B2C / Invoice-wise View */}
       {view === "b2c" && (
         <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[480px]">
             <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
               <tr>
                 <th className="px-4 py-3 text-left">Invoice No.</th>
@@ -542,7 +542,7 @@ function GSTReport({ orders }: { orders: Order[] }) {
               </div>
             </div>
             <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm min-w-[480px]">
                 <thead className="bg-blue-50 text-blue-400 text-xs uppercase tracking-wide">
                   <tr>
                     <th className="px-4 py-3 text-left">Invoice No.</th>
@@ -608,7 +608,7 @@ function GSTReport({ orders }: { orders: Order[] }) {
               </div>
             </div>
             <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm min-w-[480px]">
                 <thead className="bg-green-50 text-green-500 text-xs uppercase tracking-wide">
                   <tr>
                     <th className="px-4 py-3 text-left">Bill No.</th>
@@ -652,7 +652,7 @@ function GSTReport({ orders }: { orders: Order[] }) {
       {/* Rate-wise View */}
       {view === "rate" && (
         <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[480px]">
             <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
               <tr>
                 <th className="px-5 py-3 text-left">GST Rate</th>
@@ -694,7 +694,7 @@ function GSTReport({ orders }: { orders: Order[] }) {
       {/* HSN-wise View */}
       {view === "hsn" && (
         <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[480px]">
             <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
               <tr>
                 <th className="px-5 py-3 text-left">HSN Code</th>
@@ -757,7 +757,7 @@ function GSTReport({ orders }: { orders: Order[] }) {
               Cancelled / Voided Invoices — must be reported in GSTR-1
             </h4>
             <div className="bg-white rounded-xl shadow-sm overflow-x-auto border border-red-100">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm min-w-[480px]">
                 <thead className="bg-red-50 text-red-400 text-xs uppercase tracking-wide">
                   <tr>
                     <th className="px-4 py-3 text-left">Voided Invoice No.</th>
@@ -836,7 +836,7 @@ function CollectionsReport({ orders }: { orders: Order[] }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <SCard label="Total Billed"     value={fmtINR0(totalBilled)}     color="blue" />
         <SCard label="Amount Collected" value={fmtINR0(totalCollected)}  color="green" sub={`${collected.length} orders`} />
         <SCard label="Balance Due"      value={fmtINR0(totalBalance)}    color={totalBalance > 0 ? "red" : "green"} />
@@ -870,7 +870,7 @@ function CollectionsReport({ orders }: { orders: Order[] }) {
       )}
 
       <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
             <tr>
               <th className="px-4 py-3 text-left">Date</th>
@@ -1008,7 +1008,7 @@ function PendingReport({ orders }: { orders: Order[] }) {
           </p>
           <p className="text-orange-600 font-bold text-lg">{fmtINR(totalPending)}</p>
         </div>
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
             <tr>
               <th className="px-4 py-3 text-left">Date</th>
@@ -1164,7 +1164,7 @@ function ProfitReport({ orders }: { orders: Order[] }) {
       )}
 
       <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
             <tr>
               <th className="px-4 py-3 text-left">Date</th>
@@ -1254,7 +1254,7 @@ function PaymentModeReport({ orders }: { orders: Order[] }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <SCard label="Total Collected" value={fmtINR0(totalAmount)} color="green" sub={`${totalOrders} orders`} />
         <SCard label="Payment Modes"   value={`${modeData.length}`} color="blue"  sub="Active modes" />
       </div>

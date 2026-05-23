@@ -462,7 +462,7 @@ function buildInvoiceHTML(params: {
 
   <tr>
     <td colspan="${colspan}" style="${c}" class="title">
-      ${isGST ? "TAX INVOICE" : "BILL OF SUPPLY"}
+      ${isGST ? "TAX INVOICE" : "ESTIMATE"}
     </td>
   </tr>
 
@@ -1146,7 +1146,7 @@ export async function buildInvoicePDF(
       heightLeft -= pdfH;
     }
 
-    return pdf;
+    return { pdf, html };
   } finally {
     if (iframe.parentNode) {
       document.body.removeChild(iframe);
@@ -1163,7 +1163,7 @@ export async function generateInvoicePDF(
 ) {
   const isGST  = (options?.invoiceType ?? "estimate") === "gst";
   const prefix = isGST ? "invoice" : "estimate";
-  const pdf    = await buildInvoicePDF(order, customer, options);
+  const { pdf } = await buildInvoicePDF(order, customer, options);
   pdf.save(`${prefix}-${(order.id ?? "order").slice(0, 8)}.pdf`);
 }
 

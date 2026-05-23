@@ -126,8 +126,8 @@ export default function Settings() {
   );
 
   return (
-    <div className="p-6 max-w-3xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+    <div className="p-3 md:p-6 max-w-3xl mx-auto">
+      <div className="flex items-start justify-between mb-4 gap-3 flex-wrap">
         <div>
           <h2 className="text-2xl font-bold text-gray-800">Settings</h2>
           <p className="text-sm text-gray-400 mt-0.5">
@@ -412,36 +412,117 @@ export default function Settings() {
 
         {/* Preview */}
         <Section title="Invoice Header Preview">
-          <div className="bg-gray-50 border border-dashed border-gray-300 rounded-xl p-5">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-lg font-bold text-orange-500">
-                  {form.businessName || "Your Business Name"}
-                </p>
-                <p className="text-sm text-gray-600 mt-1">
-                  {form.address}
-                  {form.city ? `, ${form.city}` : ""}
-                  {form.state ? `, ${form.state}` : ""}
-                  {form.pincode ? ` - ${form.pincode}` : ""}
-                </p>
-                {form.phone && (
-                  <p className="text-sm text-gray-600">Ph: {form.phone}</p>
-                )}
-                {form.gstin && (
-                  <p className="text-sm text-gray-600">GSTIN: {form.gstin}</p>
-                )}
+          <div className="overflow-x-auto -mx-4 md:mx-0">
+            <div className="min-w-[320px] bg-white border border-gray-200 rounded-xl overflow-hidden mx-4 md:mx-0" style={{fontFamily: "Arial, sans-serif", fontSize: "12px"}}>
+              {/* Invoice header table */}
+              <table style={{width:"100%", borderCollapse:"collapse", border:"2px solid #333"}}>
+                <tbody>
+                  <tr>
+                    <td style={{width:"25%", border:"1px solid #999", padding:"8px", verticalAlign:"top"}}>
+                      <div style={{fontSize:"10px", color:"#555"}}>GSTIN:</div>
+                      <div style={{fontWeight:"bold", fontSize:"11px"}}>{form.gstin || "—"}</div>
+                      {form.fssaiNumber && <div style={{fontSize:"10px", color:"#555", marginTop:"4px"}}>FSSAI: {form.fssaiNumber}</div>}
+                    </td>
+                    <td style={{width:"50%", border:"1px solid #999", padding:"8px", textAlign:"center", verticalAlign:"middle"}}>
+                      <div style={{display:"flex", alignItems:"center", justifyContent:"center", gap:"8px"}}>
+                        <img src="/ptm_logo.jpeg" style={{width:"36px", height:"36px", objectFit:"contain"}} alt="logo" />
+                        <div style={{fontSize:"16px", fontWeight:"bold"}}>{form.businessName || "Your Business Name"}</div>
+                      </div>
+                      <div style={{fontSize:"10px", color:"#444", marginTop:"4px"}}>
+                        {[form.address, form.city, form.state, form.pincode ? `- ${form.pincode}` : ""].filter(Boolean).join(", ")}
+                      </div>
+                      {form.phone && <div style={{fontSize:"10px"}}>Ph: {form.phone}{form.alternatePhone ? ` / ${form.alternatePhone}` : ""}</div>}
+                    </td>
+                    <td style={{width:"25%", border:"1px solid #999", padding:"8px", textAlign:"center", verticalAlign:"middle"}}>
+                      <div style={{fontSize:"14px", fontWeight:"bold", color:"#1a1a1a"}}>TAX INVOICE</div>
+                      <div style={{fontSize:"10px", color:"#666", marginTop:"4px"}}>{form.invoicePrefix || "INV"}-2025-001</div>
+                      <div style={{fontSize:"10px", color:"#888", marginTop:"2px"}}>Date: {new Date().toLocaleDateString("en-IN")}</div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td colSpan={3} style={{border:"1px solid #999", padding:"8px"}}>
+                      <table style={{width:"100%"}}>
+                        <tbody>
+                          <tr>
+                            <td style={{width:"50%", verticalAlign:"top"}}>
+                              <div style={{fontSize:"10px", color:"#555", fontWeight:"bold"}}>CONSIGNEE:</div>
+                              <div style={{fontWeight:"bold", fontSize:"12px", marginTop:"2px"}}>Sample Customer</div>
+                              <div style={{fontSize:"10px", color:"#555"}}>123 Example Street, Chennai</div>
+                              <div style={{fontSize:"10px", color:"#555"}}>Area: Anna Nagar</div>
+                              <div style={{fontSize:"10px", color:"#555"}}>Ph: 9876543210</div>
+                            </td>
+                            <td style={{width:"50%", verticalAlign:"top", paddingLeft:"12px", borderLeft:"1px solid #e5e7eb"}}>
+                              <div style={{fontSize:"10px", color:"#555", fontWeight:"bold"}}>ORDER INFO:</div>
+                              <div style={{fontSize:"10px", marginTop:"2px"}}>Order: #PREVIEW001</div>
+                              <div style={{fontSize:"10px"}}>Agent: Field Agent</div>
+                              <div style={{fontSize:"10px"}}>Payment: Cash</div>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              {/* Items table */}
+              <table style={{width:"100%", borderCollapse:"collapse", border:"1px solid #999", borderTop:"none"}}>
+                <thead>
+                  <tr style={{background:"#f3f4f6"}}>
+                    <th style={{border:"1px solid #ccc", padding:"5px 8px", textAlign:"left", fontSize:"10px"}}>#</th>
+                    <th style={{border:"1px solid #ccc", padding:"5px 8px", textAlign:"left", fontSize:"10px"}}>Product</th>
+                    <th style={{border:"1px solid #ccc", padding:"5px 8px", textAlign:"center", fontSize:"10px"}}>Qty</th>
+                    <th style={{border:"1px solid #ccc", padding:"5px 8px", textAlign:"right", fontSize:"10px"}}>Rate</th>
+                    <th style={{border:"1px solid #ccc", padding:"5px 8px", textAlign:"right", fontSize:"10px"}}>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={{border:"1px solid #eee", padding:"5px 8px", fontSize:"10px"}}>1</td>
+                    <td style={{border:"1px solid #eee", padding:"5px 8px", fontSize:"10px"}}>Sample Product</td>
+                    <td style={{border:"1px solid #eee", padding:"5px 8px", textAlign:"center", fontSize:"10px"}}>10 KG</td>
+                    <td style={{border:"1px solid #eee", padding:"5px 8px", textAlign:"right", fontSize:"10px"}}>₹100.00</td>
+                    <td style={{border:"1px solid #eee", padding:"5px 8px", textAlign:"right", fontSize:"10px"}}>₹1,000.00</td>
+                  </tr>
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td colSpan={4} style={{border:"1px solid #ccc", padding:"5px 8px", textAlign:"right", fontWeight:"bold", fontSize:"11px"}}>Total:</td>
+                    <td style={{border:"1px solid #ccc", padding:"5px 8px", textAlign:"right", fontWeight:"bold", fontSize:"11px"}}>₹1,000.00</td>
+                  </tr>
+                </tfoot>
+              </table>
+              {/* Payment + QR row */}
+              {(form.bankName || form.accountNumber || standAloneQr) && (
+                <table style={{width:"100%", borderCollapse:"collapse", border:"1px solid #999", borderTop:"none"}}>
+                  <tbody>
+                    <tr>
+                      {(form.bankName || form.accountNumber) && (
+                        <td style={{border:"1px solid #ccc", padding:"8px", verticalAlign:"top", width: standAloneQr ? "70%" : "100%"}}>
+                          <div style={{fontSize:"10px", fontWeight:"bold", color:"#333", marginBottom:"4px"}}>BANK DETAILS:</div>
+                          {form.bankName && <div style={{fontSize:"10px"}}>{form.bankName}</div>}
+                          {form.accountNumber && <div style={{fontSize:"10px"}}>A/C: {form.accountNumber}</div>}
+                          {form.ifscCode && <div style={{fontSize:"10px"}}>IFSC: {form.ifscCode}</div>}
+                          {form.upiId && <div style={{fontSize:"10px"}}>UPI: {form.upiId}</div>}
+                        </td>
+                      )}
+                      {standAloneQr && (
+                        <td style={{border:"1px solid #ccc", padding:"8px", textAlign:"center", verticalAlign:"middle", width:"30%"}}>
+                          <div style={{fontSize:"10px", fontWeight:"bold", color:"#333", marginBottom:"4px"}}>SCAN TO PAY</div>
+                          <img src={standAloneQr} alt="UPI QR" style={{width:"80px", height:"80px", margin:"0 auto", display:"block"}} />
+                          <div style={{fontSize:"9px", color:"#666", marginTop:"2px"}}>{form.upiId}</div>
+                        </td>
+                      )}
+                    </tr>
+                  </tbody>
+                </table>
+              )}
+              {/* Footer */}
+              <div style={{borderTop:"1px solid #ccc", padding:"6px 10px", textAlign:"center", fontSize:"10px", color:"#666", fontStyle:"italic"}}>
+                {form.invoiceFooter || "Thank you for your business!"}
               </div>
-              <div className="text-right">
-                <p className="text-sm font-bold text-gray-700">TAX INVOICE</p>
-                <p className="text-sm text-gray-500">
-                  {form.invoicePrefix || "INV"}-2025-001
-                </p>
-              </div>
-            </div>
-            <div className="mt-3 pt-3 border-t border-gray-200 text-xs text-gray-400 text-center italic">
-              {form.invoiceFooter || "Thank you for your business!"}
             </div>
           </div>
+          <p className="text-xs text-gray-400 mt-3 text-center">↑ Live preview — updates as you type. Actual invoices are generated as PDF.</p>
         </Section>
 
       </div>
@@ -470,7 +551,7 @@ function Section({
       <div className="px-6 py-4 border-b border-gray-100 bg-gray-50">
         <h3 className="text-sm font-semibold text-gray-700">{title}</h3>
       </div>
-      <div className="p-6">{children}</div>
+      <div className="p-4 md:p-6">{children}</div>
     </div>
   );
 }

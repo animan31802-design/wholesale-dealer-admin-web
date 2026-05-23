@@ -264,9 +264,9 @@ ${skipped} rows skipped (missing shop name or phone)`);
   const customersWithDue = customers.filter((c) => (c.outstandingDue || 0) > 0).length;
 
   return (
-    <div className="p-6">
+    <div className="p-3 md:p-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex items-start justify-between mb-4 gap-3 flex-wrap">
         <div>
           <h2 className="text-2xl font-bold text-gray-800">Customers</h2>
           <p className="text-sm text-gray-400 mt-0.5">
@@ -328,7 +328,7 @@ ${skipped} rows skipped (missing shop name or phone)`);
 
       {/* Table */}
       {loading ? <p className="text-gray-400">Loading...</p> : (
-        <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
+        <div className="bg-white rounded-xl shadow-sm overflow-x-auto -mx-3 md:mx-0">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-gray-500 text-left text-xs uppercase tracking-wide">
               <tr>
@@ -416,17 +416,17 @@ ${skipped} rows skipped (missing shop name or phone)`);
 
       {/* Customer Form Modal */}
       {showForm && isAdmin && (
-        <div className="fixed inset-0 bg-black/60 flex items-start justify-center z-50 overflow-y-auto py-8 px-4">
-          <div className="bg-white rounded-2xl w-full max-w-xl shadow-2xl">
+        <div className="fixed inset-0 bg-black/60 flex items-start justify-center z-50 overflow-y-auto py-0 md:py-8 px-0 md:px-4">
+          <div className="bg-white rounded-none md:rounded-2xl w-full max-w-xl shadow-2xl min-h-screen md:min-h-0">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <h3 className="text-lg font-semibold text-gray-800">{editId ? "Edit Customer" : "Add New Customer"}</h3>
               <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
             </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-6">
+            <form onSubmit={handleSubmit} className="p-4 md:p-6 space-y-6">
               <Sec title="Shop Information">
                 <Fld label="Shop Name *"><input value={form.shopName} onChange={(e) => setForm({ ...form, shopName: e.target.value })} required placeholder="e.g. Sri Murugan Stores" className={inp} /></Fld>
                 <Fld label="Owner Name"><input value={form.ownerName} onChange={(e) => setForm({ ...form, ownerName: e.target.value })} placeholder="e.g. Ravi Kumar (optional)" className={inp} /></Fld>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Fld label="Phone *">
                     <input
                       value={form.phone}
@@ -900,7 +900,7 @@ function LedgerModal({ customer, isAdmin, onClose }: {
 
           {/* Record Payment tab */}
           {tab === "payment" && isAdmin && (
-            <div className="p-6">
+            <div className="p-3 md:p-6">
               {balance <= 0 ? (
                 <div className="text-center py-12 text-gray-400">
                   <p className="text-3xl mb-3">✅</p>
@@ -993,7 +993,7 @@ function LedgerModal({ customer, isAdmin, onClose }: {
 
           {/* Adjustment tab */}
           {tab === "adjust" && isAdmin && (
-            <div className="p-6">
+            <div className="p-3 md:p-6">
               <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4">
                 <p className="text-sm text-blue-700 font-medium">Use adjustments to correct errors or add charges/credits.</p>
                 <p className="text-sm text-blue-600 mt-1">

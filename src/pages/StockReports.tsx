@@ -136,13 +136,13 @@ export default function StockReports() {
   ];
 
   if (loading) return (
-    <div className="p-8 flex items-center gap-3 text-gray-400">
+    <div className="p-4 flex items-center gap-3 text-gray-400">
       <span className="animate-spin text-xl">⏳</span> Loading stock data...
     </div>
   );
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="p-3 md:p-6 max-w-7xl mx-auto">
       {/* Header */}
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-gray-800">📦 Stock Reports</h2>
@@ -264,7 +264,7 @@ function CurrentStockReport({ products }: { products: Product[] }) {
       </div>
 
       <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
             <tr>
               <th className="px-5 py-3 text-left">Product</th>
@@ -336,7 +336,7 @@ function LowStockReport({ products }: { products: Product[] }) {
   return (
     <div className="space-y-6">
       {/* Summary cards */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="bg-red-50 border border-red-200 rounded-2xl p-5">
           <p className="text-xs text-red-400 font-semibold uppercase tracking-wide mb-1">Out of Stock</p>
           <p className="text-4xl font-bold text-red-600">{outOfStock.length}</p>
@@ -357,7 +357,7 @@ function LowStockReport({ products }: { products: Product[] }) {
         </div>
       ) : (
         <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div className="flex items-start justify-between px-4 md:px-5 py-4 border-b border-gray-100 gap-2 flex-wrap">
             <p className="font-semibold text-gray-800">Reorder List <span className="text-gray-400 font-normal text-sm">({reorderList.length} products)</span></p>
             <div className="flex gap-2">
               <button onClick={handlePrint}
@@ -370,7 +370,7 @@ function LowStockReport({ products }: { products: Product[] }) {
               </button>
             </div>
           </div>
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[480px]">
             <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
               <tr>
                 <th className="px-5 py-3 text-left">Product</th>
@@ -465,7 +465,7 @@ function MovementReport({
   return (
     <div>
       {/* Summary cards */}
-      <div className="grid grid-cols-3 gap-4 mb-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
         <div className="bg-white rounded-xl shadow-sm p-4 border-l-4 border-blue-400">
           <p className="text-xs text-gray-400 font-medium">Total Movements</p>
           <p className="text-2xl font-bold text-gray-800">{filtered.length}</p>
@@ -512,7 +512,7 @@ function MovementReport({
       </div>
 
       <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
             <tr>
               <th className="px-5 py-3 text-left">Date</th>
@@ -600,7 +600,7 @@ function ValuationReport({ products }: { products: Product[] }) {
   return (
     <div>
       {/* Summary */}
-      <div className="grid grid-cols-3 gap-4 mb-5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">
         <div className="bg-white rounded-xl shadow-sm p-5 border-l-4 border-blue-400">
           <p className="text-xs text-gray-400 font-medium mb-1">Total Sell Value</p>
           <p className="text-2xl font-bold text-gray-800">₹{totalSellValue.toLocaleString("en-IN", { maximumFractionDigits: 0 })}</p>
@@ -643,7 +643,7 @@ function ValuationReport({ products }: { products: Product[] }) {
       </div>
 
       <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
             <tr>
               <th className="px-5 py-3 text-left">Product</th>
@@ -756,7 +756,7 @@ function FastSlowReport({ products, orders }: { products: Product[]; orders: Ord
   return (
     <div>
       {/* Summary */}
-      <div className="grid grid-cols-3 gap-4 mb-5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">
         <div className="bg-green-50 border border-green-200 rounded-xl p-4">
           <p className="text-xs text-green-600 font-semibold uppercase">Fast Moving</p>
           <p className="text-3xl font-bold text-green-700">{ranked.filter(p => p.qty > 0).length}</p>
@@ -841,7 +841,7 @@ function FastSlowReport({ products, orders }: { products: Product[]; orders: Ord
 
       {view === "table" && (
         <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[480px]">
             <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
               <tr>
                 <th className="px-5 py-3 text-center">Rank</th>

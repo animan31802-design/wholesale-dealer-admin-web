@@ -175,13 +175,13 @@ export default function OrderReports() {
   ];
 
   if (loading) return (
-    <div className="p-8 flex items-center gap-3 text-gray-400">
+    <div className="p-4 flex items-center gap-3 text-gray-400">
       <span className="animate-spin text-xl">⏳</span> Loading orders...
     </div>
   );
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="p-3 md:p-6 max-w-7xl mx-auto">
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-gray-800">📦 Order Reports</h2>
         <p className="text-sm text-gray-400 mt-0.5">
@@ -320,7 +320,7 @@ function ByStatusReport({ orders }: { orders: Order[] }) {
 
       {/* Table */}
       <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
             <tr>
               <th className="px-5 py-3 text-left">Status</th>
@@ -419,7 +419,7 @@ function ByRegionReport({ orders }: { orders: Order[] }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <SCard label="Regions" value={`${regionStats.length}`} color="blue" />
         <SCard label="Total Orders" value={`${grandOrders}`} color="orange" sub="Non-cancelled" />
         <SCard label="Total Value" value={fmtINR0(grandValue)} color="green" />
@@ -452,7 +452,7 @@ function ByRegionReport({ orders }: { orders: Order[] }) {
       )}
 
       <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
             <tr>
               <th className="px-5 py-3 text-left">Region</th>
@@ -510,7 +510,7 @@ function ByRegionReport({ orders }: { orders: Order[] }) {
 
       {selected && (
         <div className="bg-white rounded-xl shadow-sm">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div className="flex items-start justify-between px-4 md:px-5 py-4 border-b border-gray-100 gap-2 flex-wrap">
             <p className="font-semibold text-gray-800">
               🗺️ {selected} — Orders <span className="text-gray-400 font-normal text-sm ml-1">({drillOrders.length})</span>
             </p>
@@ -520,7 +520,7 @@ function ByRegionReport({ orders }: { orders: Order[] }) {
             />
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm min-w-[480px]">
               <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
                 <tr>
                   <th className="px-4 py-3 text-left">Date</th>
@@ -598,7 +598,7 @@ function CancelledReport({ orders }: { orders: Order[] }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <SCard label="Cancelled Orders" value={`${cancelled.length}`}    color="red"    />
         <SCard label="Lost Value"       value={fmtINR0(totalLostValue)}  color="orange" sub="Revenue not realised" />
         <SCard label="Cancel Rate"      value={`${cancelRate}%`}         color="yellow" sub="Of orders in period" />
@@ -652,7 +652,7 @@ function CancelledReport({ orders }: { orders: Order[] }) {
       )}
 
       <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
             <tr>
               <th className="px-4 py-3 text-left">Cancelled At</th>
@@ -811,7 +811,7 @@ function DeliveryPerfReport({ orders }: { orders: Order[] }) {
 
       {/* Detail table */}
       <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
             <tr>
               <th className="px-4 py-3 text-left">Invoice</th>
@@ -889,7 +889,7 @@ function ReturnsReport({ orders }: { orders: Order[] }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <SCard label="Return Orders"   value={`${returns.length}`}        color="orange" />
         <SCard label="Total Returned"  value={fmtINR0(totalReturnValue)}  color="red"    sub="Value of returned goods" />
         <SCard label="Products"        value={`${productReturns.length}`} color="purple" sub="Unique products returned" />
@@ -926,7 +926,7 @@ function ReturnsReport({ orders }: { orders: Order[] }) {
       )}
 
       <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
             <tr>
               <th className="px-4 py-3 text-left">Returned At</th>
@@ -1064,7 +1064,7 @@ function DailyExportReport({ orders }: { orders: Order[] }) {
       </div>
 
       <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
             <tr>
               <th className="px-4 py-3 text-left">Invoice</th>

@@ -987,9 +987,9 @@ export default function CreateOrderPage() {
 
   if (step === "select-customer") {
     return (
-      <div className="p-6 max-w-2xl mx-auto">
+      <div className="p-3 md:p-6 max-w-2xl mx-auto">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-start justify-between mb-4 gap-3 flex-wrap">
           <div>
             <h2 className="text-2xl font-bold text-gray-800">Create Order</h2>
             <p className="text-sm text-gray-400 mt-0.5">Select a customer to begin billing</p>
@@ -1175,7 +1175,7 @@ export default function CreateOrderPage() {
 
       {/* ── PRODUCTS VIEW ── */}
       {view === "products" && (
-        <div className="flex-1 flex flex-col overflow-hidden max-w-3xl mx-auto w-full">
+        <div className="flex-1 flex flex-col overflow-hidden max-w-3xl mx-auto w-full min-w-0">
           {/* Search */}
           <div className="px-4 py-3">
             <TamilSearchInput
@@ -1221,7 +1221,7 @@ export default function CreateOrderPage() {
                   return (
                     <button key={p.id} onClick={() => addToCart(p)} disabled={disabled}
                       className="bg-white border border-gray-100 rounded-xl p-2.5 text-left min-w-[110px] hover:border-orange-200 shadow-sm disabled:opacity-40 flex-shrink-0">
-                      <p className="text-xs font-medium text-gray-800 truncate max-w-[100px]">{p.name}</p>
+                      <p className="text-xs font-medium text-gray-800 truncate max-w-[90px] sm:max-w-[120px]">{p.name}</p>
                       <p className="text-xs text-gray-400">₹{fmtPrice(getSlabPrice(p, 1))}</p>
                       {(cartQty[p.id!] ?? 0) > 0 && (
                         <p className="text-xs text-orange-500 mt-0.5">In cart: {fmtQty(cartQty[p.id!])}</p>
@@ -1346,7 +1346,7 @@ export default function CreateOrderPage() {
 
               {/* Advance payment section */}
               <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-4">
-                <div className="flex items-center justify-between mb-3">
+                <div className="flex items-start justify-between mb-3 gap-2 flex-wrap">
                   <div>
                     <p className="text-sm font-semibold text-blue-800">Advance Payment</p>
                     <p className="text-xs text-blue-500 mt-0.5">Leave blank to collect full amount on delivery</p>
@@ -1392,7 +1392,7 @@ export default function CreateOrderPage() {
                 {paidAmount && parseFloat(paidAmount) > 0 && (
                   <div className="mt-3">
                     <p className="text-xs text-blue-600 font-medium mb-1.5">Payment method for advance</p>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 flex-wrap">
                       {(["cash", "upi", "bank", "credit"] as const).map((m) => (
                         <button key={m} onClick={() => setPaymentMode(m)}
                           className={`flex-1 py-1.5 rounded-lg text-xs font-medium border capitalize transition-all ${

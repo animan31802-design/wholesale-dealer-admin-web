@@ -187,7 +187,7 @@ export default function AgentReports() {
   ];
 
   if (loading) return (
-    <div className="p-8 flex items-center gap-3 text-gray-400">
+    <div className="p-4 flex items-center gap-3 text-gray-400">
       <span className="animate-spin text-xl">⏳</span> Loading agent data...
     </div>
   );
@@ -197,7 +197,7 @@ export default function AgentReports() {
   const packingStaff   = users.filter(u => u.role === "packing_staff");
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="p-3 md:p-6 max-w-7xl mx-auto">
       {/* Header */}
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-gray-800">🧑‍💼 Agent Reports</h2>
@@ -366,7 +366,7 @@ function FieldAgentReport({ orders, agents }: { orders: Order[]; agents: AppUser
 
       {/* Summary table */}
       <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
             <tr>
               <th className="px-4 py-3 text-left">Agent</th>
@@ -443,7 +443,7 @@ function FieldAgentReport({ orders, agents }: { orders: Order[]; agents: AppUser
       {/* Drilldown panel */}
       {selected && selectedAgent && (
         <div className="bg-white rounded-xl shadow-sm">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div className="flex items-start justify-between px-4 md:px-5 py-4 border-b border-gray-100 gap-2 flex-wrap">
             <p className="font-semibold text-gray-800">
               📋 {selectedAgent.name}'s Orders
               <span className="text-gray-400 font-normal text-sm ml-2">({drillOrders.length} orders)</span>
@@ -455,7 +455,7 @@ function FieldAgentReport({ orders, agents }: { orders: Order[]; agents: AppUser
             />
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm min-w-[480px]">
               <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
                 <tr>
                   <th className="px-4 py-3 text-left">Date</th>
@@ -594,7 +594,7 @@ function DeliveryAgentReport({ orders, agents }: { orders: Order[]; agents: AppU
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <SCard label="Delivery Agents" value={`${agents.length}`}      color="blue"  />
         <SCard label="Total Delivered" value={`${grandDelivered}`}     color="green" sub={`of ${grandAssigned} assigned`} />
         <SCard label="Collected"       value={fmtINR0(grandCollected)} color="orange" />
@@ -609,7 +609,7 @@ function DeliveryAgentReport({ orders, agents }: { orders: Order[]; agents: AppU
       </div>
 
       <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
             <tr>
               <th className="px-4 py-3 text-left">Agent</th>
@@ -673,7 +673,7 @@ function DeliveryAgentReport({ orders, agents }: { orders: Order[]; agents: AppU
       {/* Drilldown */}
       {selected && selectedAgent && (
         <div className="bg-white rounded-xl shadow-sm">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div className="flex items-start justify-between px-4 md:px-5 py-4 border-b border-gray-100 gap-2 flex-wrap">
             <p className="font-semibold text-gray-800">
               🚚 {selectedAgent.name}'s Deliveries
               <span className="text-gray-400 font-normal text-sm ml-2">({drillOrders.length})</span>
@@ -684,7 +684,7 @@ function DeliveryAgentReport({ orders, agents }: { orders: Order[]; agents: AppU
             />
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm min-w-[480px]">
               <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
                 <tr>
                   <th className="px-4 py-3 text-left">Date</th>
@@ -850,7 +850,7 @@ function DailyActivityReport({ orders, users }: { orders: Order[]; users: AppUse
             <span className="text-sm font-semibold text-gray-800">🧑‍💼 Field Agents</span>
             <span className="text-xs text-gray-400">— Orders created on {fmtDate(date)}</span>
           </div>
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[480px]">
             <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
               <tr>
                 <th className="px-5 py-3 text-left">Agent</th>
@@ -883,7 +883,7 @@ function DailyActivityReport({ orders, users }: { orders: Order[]; users: AppUse
             <span className="text-sm font-semibold text-gray-800">🚚 Delivery Agents</span>
             <span className="text-xs text-gray-400">— Deliveries completed on {fmtDate(date)}</span>
           </div>
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[480px]">
             <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
               <tr>
                 <th className="px-5 py-3 text-left">Agent</th>
@@ -914,7 +914,7 @@ function DailyActivityReport({ orders, users }: { orders: Order[]; users: AppUse
             <span className="text-sm font-semibold text-gray-800">📦 Packing Staff</span>
             <span className="text-xs text-gray-400">— Orders packed on {fmtDate(date)}</span>
           </div>
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[480px]">
             <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
               <tr>
                 <th className="px-5 py-3 text-left">Staff</th>
@@ -1039,7 +1039,7 @@ function PackingStaffReport({ orders, staff }: { orders: Order[]; staff: AppUser
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <SCard label="Packing Staff"   value={`${staff.length}`}   color="blue"   />
         <SCard label="Orders Packed"   value={`${grandPacked}`}    color="purple" sub="In selected period" />
         <SCard label="Total Items"     value={`${grandItems}`}     color="orange" sub="Units packed" />
@@ -1071,7 +1071,7 @@ function PackingStaffReport({ orders, staff }: { orders: Order[]; staff: AppUser
       )}
 
       <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
             <tr>
               <th className="px-4 py-3 text-left">Staff</th>
@@ -1128,7 +1128,7 @@ function PackingStaffReport({ orders, staff }: { orders: Order[]; staff: AppUser
       {/* Drilldown */}
       {selected && selectedStaff && (
         <div className="bg-white rounded-xl shadow-sm">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div className="flex items-start justify-between px-4 md:px-5 py-4 border-b border-gray-100 gap-2 flex-wrap">
             <p className="font-semibold text-gray-800">
               📦 {selectedStaff.name}'s Packed Orders
               <span className="text-gray-400 font-normal text-sm ml-2">({drillOrders.length})</span>
@@ -1139,7 +1139,7 @@ function PackingStaffReport({ orders, staff }: { orders: Order[]; staff: AppUser
             />
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm min-w-[480px]">
               <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
                 <tr>
                   <th className="px-4 py-3 text-left">Packed At</th>

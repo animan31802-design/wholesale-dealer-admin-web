@@ -330,16 +330,16 @@ export default function CustomerReports() {
   ];
 
   if (loading) return (
-    <div className="p-8 flex items-center gap-3 text-gray-400">
+    <div className="p-4 flex items-center gap-3 text-gray-400">
       <span className="animate-spin text-xl">⏳</span> Loading customer reports...
     </div>
   );
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="p-3 md:p-6 max-w-7xl mx-auto">
 
       {/* Header */}
-      <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 gap-3">
         <div>
           <h2 className="text-2xl font-bold text-gray-800">Customer Reports</h2>
           <p className="text-sm text-gray-400 mt-0.5">
@@ -651,7 +651,7 @@ export default function CustomerReports() {
                       <h3 className="text-sm font-semibold text-gray-700">Full Transaction History</h3>
                     </div>
                     <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
+                      <table className="w-full text-sm min-w-[480px]">
                         <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
                           <tr>
                             <th className="px-5 py-3 text-left">Date</th>
@@ -732,7 +732,7 @@ function CRTable({ title, headers, rows, totals, emptyText }: {
         <h3 className="text-sm font-semibold text-gray-700">{title}</h3>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
             <tr>{headers.map((h) => <th key={h} className="px-5 py-3 text-left">{h}</th>)}</tr>
           </thead>

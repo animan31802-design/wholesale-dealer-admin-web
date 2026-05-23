@@ -232,16 +232,16 @@ export default function Products() {
   const margin = (p: Product) => p.costPrice > 0 ? (((p.sellingPrice - p.costPrice) / p.costPrice) * 100).toFixed(0) : null;
 
   return (
-    <div className="p-8">
+    <div className="p-3 md:p-8">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-start justify-between mb-4 gap-3 flex-wrap">
         <div>
           <h2 className="text-2xl font-bold text-gray-800">Products</h2>
           <p className="text-sm text-gray-400 mt-0.5">
             {products.length} products{isAdmin ? ` · Stock value ₹${stockValue.toLocaleString("en-IN", { maximumFractionDigits: 0 })} (sell price)` : ""}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           {isAdmin && (
             <>
               <button onClick={() => setShowBulkModal(true)} className="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm hover:bg-gray-50">📊 Bulk Price</button>
@@ -305,7 +305,7 @@ export default function Products() {
       {/* Table */}
       {loading ? <p className="text-gray-400">Loading...</p> : (
         <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[600px]">
             <thead className="bg-gray-50 text-gray-500 text-left text-xs uppercase tracking-wide">
               <tr>
                 <th className="px-5 py-4">Product</th>
@@ -368,7 +368,7 @@ export default function Products() {
                     </td>
                     <td className="px-5 py-4">
                       {isAdmin && (
-                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                           <button onClick={() => handleEdit(product)} className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100">✏️ Edit</button>
                           <button onClick={() => handleDuplicate(product)} className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded hover:bg-gray-100">📋 Copy</button>
                           {product.trackInventory && <button onClick={() => setStockModal(product)} className="text-xs bg-green-50 text-green-600 px-2 py-1 rounded hover:bg-green-100">📦 Stock</button>}
@@ -394,13 +394,13 @@ export default function Products() {
 
       {/* Product Form Modal */}
       {showForm && isAdmin && (
-        <div className="fixed inset-0 bg-black/60 flex items-start justify-center z-50 overflow-y-auto py-8 px-4">
-          <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl">
+        <div className="fixed inset-0 bg-black/60 flex items-start justify-center z-50 overflow-y-auto py-0 md:py-8 px-0 md:px-4">
+          <div className="bg-white rounded-none md:rounded-2xl w-full max-w-2xl shadow-2xl min-h-screen md:min-h-0">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <h3 className="text-lg font-semibold text-gray-800">{editId ? "Edit Product" : "Add New Product"}</h3>
               <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
             </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-6">
+            <form onSubmit={handleSubmit} className="p-4 md:p-6 space-y-6">
               <Section title="Basic Information">
                 <Field label="Product Name *">
                   <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -443,7 +443,7 @@ export default function Products() {
               </Section>
 
               <Section title="Pricing">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Field label="Selling Price (₹) *">
                     <input type="number" min="0" step="0.01" value={form.sellingPrice}
                       onChange={(e) => setForm({ ...form, sellingPrice: Number(e.target.value) })} required className={inputCls} />
@@ -731,7 +731,7 @@ function StockHistoryModal({ product, onClose }: { product: Product; onClose: ()
             : movements.length === 0
               ? <div className="text-center py-16 text-gray-400"><p className="text-3xl mb-2">📭</p><p>No history yet</p></div>
               : (
-                <table className="w-full text-sm">
+                <table className="w-full text-sm min-w-[400px]">
                   <thead className="bg-gray-50 text-gray-400 text-xs uppercase tracking-wide sticky top-0">
                     <tr>
                       <th className="px-5 py-3 text-left">Date</th>
