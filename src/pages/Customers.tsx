@@ -53,6 +53,8 @@ export default function Customers() {
   const PER_PAGE = 15;
   const { user } = useAuthStore();
   const isAdmin = user?.role === "admin";
+  const isPackingStaff = user?.role === "packing_staff";
+  const canCreate = isAdmin || isPackingStaff;
   const csvRef = useRef<HTMLInputElement>(null);
 
   // ── Tamil-aware search ────────────────────────────────────────────────────
@@ -290,13 +292,15 @@ ${skipped} rows skipped (missing shop name or phone)`);
                 ⬆️ Import
               </button>
               <input ref={csvRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleImport} />
-              <button onClick={() => { setForm(emptyCustomer()); setEditId(null); setShowForm(true); }}
-                className="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-600">
-                + Add Customer
-              </button>
             </>
           )}
-          {!isAdmin && (
+          {canCreate && (
+            <button onClick={() => { setForm(emptyCustomer()); setEditId(null); setShowForm(true); }}
+              className="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-600">
+              + Add Customer
+            </button>
+          )}
+          {!canCreate && (
             <span className="text-xs text-gray-400 bg-gray-100 px-3 py-2 rounded-lg">View Only</span>
           )}
         </div>
@@ -415,7 +419,7 @@ ${skipped} rows skipped (missing shop name or phone)`);
       )}
 
       {/* Customer Form Modal */}
-      {showForm && isAdmin && (
+      {showForm && canCreate && (
         <div className="fixed inset-0 bg-black/60 flex items-start justify-center z-50 overflow-y-auto py-0 md:py-8 px-0 md:px-4">
           <div className="bg-white rounded-none md:rounded-2xl w-full max-w-xl shadow-2xl min-h-screen md:min-h-0">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">

@@ -111,9 +111,12 @@ export default function Orders() {
       setOrders(all);
       setLoading(false);
     });
-    getDocs(query(collection(db, "users"), where("role", "==", "delivery"))).then((snap) => {
-      setAllUsers(snap.docs.map((d) => d.data() as AppUser));
-    });
+    // Only admin can query all users — packing staff don't need the delivery agents list
+    if (user?.role === "admin") {
+      getDocs(query(collection(db, "users"), where("role", "==", "delivery"))).then((snap) => {
+        setAllUsers(snap.docs.map((d) => d.data() as AppUser));
+      });
+    }
     return () => { unsub(); };
   }, []);
 
