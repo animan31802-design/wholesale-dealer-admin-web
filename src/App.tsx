@@ -133,7 +133,7 @@ export default function App() {
           <Route path="packing"       element={<OpsRoute><PackingStation /></OpsRoute>} />
 
           {/* Create order — admin only (admins place orders on behalf of field agents on web) */}
-          <Route path="create-order"     element={<AdminRoute><CreateOrderPage /></AdminRoute>} />
+          <Route path="create-order"     element={<OpsRoute><CreateOrderPage /></OpsRoute>} />
 
           {/* Agent Cash Collection — admin only */}
           <Route path="agent-cash"       element={<AdminRoute><AgentCashCollection /></AdminRoute>} />

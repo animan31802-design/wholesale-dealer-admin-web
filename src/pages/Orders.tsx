@@ -288,7 +288,7 @@ export default function Orders() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 gap-3">
         <h2 className="text-2xl font-bold text-gray-800">Orders</h2>
         <div className="flex flex-wrap items-center gap-2">
-          {user?.role === "admin" && (
+          {(user?.role === "admin" || user?.role === "packing_staff") && (
             <button
               onClick={() => navigate("/create-order")}
               className="flex items-center gap-2 bg-orange-500 text-white px-3 py-1.5 rounded-lg text-sm font-semibold hover:bg-orange-600 transition-all shadow-sm"
@@ -560,7 +560,7 @@ export default function Orders() {
                         🔄 Reassign Agent
                       </button>
                     )}
-                    {(order.status === "pending" || order.status === "packed") && (
+                    {(order.status === "pending" || order.status === "packed") && user?.role === "admin" && (
                       <button onClick={(e) => { e.stopPropagation(); setCancelOrder(order); }}
                         className="bg-red-100 text-red-600 text-xs px-3 py-1.5 rounded-lg hover:bg-red-200 font-medium">
                         Cancel
@@ -575,20 +575,22 @@ export default function Orders() {
                           </span>
                         ) : null;
                       })()}
-                    {order.status === "delivered" && (
+                    {order.status === "delivered" && user?.role === "admin" && (
                       <button onClick={(e) => { e.stopPropagation(); setReturnOrder(order); }}
                         className="bg-red-100 text-red-600 text-xs px-3 py-1.5 rounded-lg hover:bg-red-200 font-medium">
                         ↩️ Return
                       </button>
                     )}
-                    <button onClick={() => setInvoiceOrder(order)}
-                      className={`text-xs px-3 py-1.5 rounded-lg font-medium ${
-                        order.invoiceNumber
-                          ? "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                          : "bg-orange-500 text-white hover:bg-orange-600"
-                      }`}>
-                      {order.invoiceNumber ? "👁 View Invoice" : "🧾 Generate Invoice"}
-                    </button>
+                    {user?.role === "admin" && (
+                      <button onClick={() => setInvoiceOrder(order)}
+                        className={`text-xs px-3 py-1.5 rounded-lg font-medium ${
+                          order.invoiceNumber
+                            ? "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                            : "bg-orange-500 text-white hover:bg-orange-600"
+                        }`}>
+                        {order.invoiceNumber ? "👁 View Invoice" : "🧾 Generate Invoice"}
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -1310,6 +1312,8 @@ export function OrderDetailPanel({
   onCancel: (order: Order) => void;
   deliveryUsers: AppUser[];
 }) {
+  const { user: panelUser } = useAuthStore();
+  const isAdmin = panelUser?.role === "admin";
   const fmt = (iso?: string): string | undefined =>
     iso
       ? new Date(iso).toLocaleString("en-IN", {
@@ -1662,7 +1666,7 @@ export function OrderDetailPanel({
                 🚚 Assign Delivery Agent
               </button>
             )}
-            {(order.status === "pending" || order.status === "packed") && (
+            {(order.status === "pending" || order.status === "packed") && isAdmin && (
               <button
                 onClick={() => onCancel(order)}
                 className="flex-1 bg-red-100 text-red-600 py-2.5 rounded-xl text-sm font-medium hover:bg-red-200"
@@ -1670,16 +1674,18 @@ export function OrderDetailPanel({
                 🚫 Cancel Order
               </button>
             )}
-            <button
-              onClick={() => onInvoice(order)}
-              className={`flex-1 py-2.5 rounded-xl text-sm font-medium ${
-                order.invoiceNumber
-                  ? "bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-200"
-                  : "bg-orange-500 text-white hover:bg-orange-600"
-              }`}
-            >
-              {order.invoiceNumber ? "👁 View Invoice" : "🧾 Generate Invoice"}
-            </button>
+            {isAdmin && (
+              <button
+                onClick={() => onInvoice(order)}
+                className={`flex-1 py-2.5 rounded-xl text-sm font-medium ${
+                  order.invoiceNumber
+                    ? "bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-200"
+                    : "bg-orange-500 text-white hover:bg-orange-600"
+                }`}
+              >
+                {order.invoiceNumber ? "👁 View Invoice" : "🧾 Generate Invoice"}
+              </button>
+            )}
           </div>
         </div>
       </div>

@@ -68,6 +68,7 @@ const adminNavItems: NavItem[] = [
 // Packing staff — no create order access
 const packingNavItems: NavItem[] = [
   { path: "/orders", label: "Orders", icon: "📦" },
+  { path: "/create-order", label: "Create Order", icon: "➕" },
   { path: "/packing", label: "Packing View", icon: "📋" },
   { path: "/products", label: "Products", icon: "🛒" },
   { path: "/customers", label: "Customers", icon: "🏪" },

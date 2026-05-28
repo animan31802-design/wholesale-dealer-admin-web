@@ -62,6 +62,7 @@ export default function Products() {
   const fileRef = useRef<HTMLInputElement>(null);
   const { user } = useAuthStore();
   const isAdmin = user?.role === "admin";
+  const isPackingStaff = user?.role === "packing_staff";
   const [stockModal, setStockModal] = useState<Product | null>(null);
   const [ledgerModal, setLedgerModal] = useState<Product | null>(null);
   const [page, setPage] = useState(1);
@@ -265,7 +266,7 @@ export default function Products() {
                 className="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-600">+ Add Product</button>
             </>
           )}
-          {!isAdmin && <span className="text-xs text-gray-400 bg-gray-100 px-3 py-2 rounded-lg">View Only</span>}
+          {!isAdmin && !isPackingStaff && <span className="text-xs text-gray-400 bg-gray-100 px-3 py-2 rounded-lg">View Only</span>}
         </div>
       </div>
 
@@ -330,7 +331,7 @@ export default function Products() {
                 <th className="px-5 py-4">GST</th>
                 <th className="px-5 py-4">Stock</th>
                 <th className="px-5 py-4">Slabs</th>
-                {isAdmin && <th className="px-5 py-4">Actions</th>}
+                {(isAdmin || isPackingStaff) && <th className="px-5 py-4">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -397,6 +398,12 @@ export default function Products() {
                           {product.trackInventory && <button onClick={() => setStockModal(product)} className="text-xs bg-green-50 text-green-600 px-2 py-1 rounded hover:bg-green-100">📦 Stock</button>}
                           {product.trackInventory && <button onClick={() => setLedgerModal(product)} className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded hover:bg-purple-100">📒 Ledger</button>}
                           <button onClick={() => setDeleteConfirm(product)} className="text-xs bg-red-50 text-red-500 px-2 py-1 rounded hover:bg-red-100">🗑️</button>
+                        </div>
+                      )}
+                      {isPackingStaff && product.trackInventory && (
+                        <div className="flex gap-1 flex-wrap opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                          <button onClick={() => setStockModal(product)} className="text-xs bg-green-50 text-green-600 px-2 py-1 rounded hover:bg-green-100">📦 Stock</button>
+                          <button onClick={() => setLedgerModal(product)} className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded hover:bg-purple-100">📒 Ledger</button>
                         </div>
                       )}
                     </td>
@@ -624,7 +631,7 @@ export default function Products() {
         </div>
       )}
 
-      {stockModal  && isAdmin && <StockAdjustModal  product={stockModal}  onClose={() => setStockModal(null)}  onAdjust={handleStockAdjust} />}
+      {stockModal  && (isAdmin || isPackingStaff) && <StockAdjustModal  product={stockModal}  onClose={() => setStockModal(null)}  onAdjust={handleStockAdjust} />}
       {ledgerModal &&            <StockLedgerModal   product={ledgerModal} onClose={() => setLedgerModal(null)} />}
       {deleteConfirm && isAdmin && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
