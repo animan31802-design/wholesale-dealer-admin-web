@@ -2,10 +2,10 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import {
   collection, getDocs, addDoc, updateDoc,
   deleteDoc, doc, orderBy, query,
-  onSnapshot
+  onSnapshot, where
 } from "firebase/firestore";
 import { db } from "../firebase/config";
-import { Product, PriceSlab, ProductUnit, GSTRate } from "../types";
+import { Product, PriceSlab, ProductUnit, GSTRate, Order } from "../types";
 import { useAuthStore } from "../store/authStore";
 import Pagination from "../components/Pagination";
 import { useTamilSearch } from "../utils/UseTamilSearch";
@@ -20,6 +20,9 @@ const GST_RATES: { label: string; value: GSTRate }[] = [
   { label: "28%", value: "28" },
 ];
 
+// Units that are naturally fractional — always allow decimals for stock
+const FRACTIONAL_UNITS: ProductUnit[] = ["KG", "Gram", "Liter", "ML"];
+
 type StockFilter = "ALL" | "LOW_STOCK" | "OUT_OF_STOCK";
 type SortMode = "AZ" | "ZA" | "sellingPrice" | "costPrice" | "stock";
 
@@ -30,6 +33,15 @@ const emptyProduct = (): Product => ({
   safetyBuffer: { type: "fixed", value: 0 },
   sellInFraction: false, priceSlabs: [], barcode: "", hsn: "", taxInclusive: false,
 });
+
+// Whether a product should allow decimal stock entry
+function allowsDecimal(p: Product): boolean {
+  return p.sellInFraction || FRACTIONAL_UNITS.includes(p.unit);
+}
+
+function stockStep(p: Product): string {
+  return allowsDecimal(p) ? "0.001" : "1";
+}
 
 export default function Products() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -51,7 +63,7 @@ export default function Products() {
   const { user } = useAuthStore();
   const isAdmin = user?.role === "admin";
   const [stockModal, setStockModal] = useState<Product | null>(null);
-  const [historyModal, setHistoryModal] = useState<Product | null>(null);
+  const [ledgerModal, setLedgerModal] = useState<Product | null>(null);
   const [page, setPage] = useState(1);
   const PER_PAGE = 25;
 
@@ -66,13 +78,9 @@ export default function Products() {
     return () => unsub();
   }, []);
 
-  // ── Tamil-aware search ─────────────────────────────────────────────────────
-  // Searches name, category, barcode. Works with English typing for Tamil names.
-  // e.g. typing "arisi" matches products named "அரிசி"
   const { query: searchQuery, setQuery: setSearchQuery, results: searchResults } =
     useTamilSearch(products as unknown as Record<string, unknown>[], ["name", "category", "barcode"]);
 
-  // ── Stock filter + sort (applied on top of search results) ────────────────
   const filtered = useMemo(() => {
     let list = searchResults as unknown as Product[];
     if (catFilter !== "All") list = list.filter((p) => p.category === catFilter);
@@ -103,7 +111,6 @@ export default function Products() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // ── Input validation: prevent negative/NaN values corrupting stock maths ──
     if (!isFinite(form.sellingPrice) || form.sellingPrice < 0) {
       alert("Selling price must be a valid non-negative number."); return;
     }
@@ -155,9 +162,9 @@ export default function Products() {
 
   const handleStockAdjust = async (product: Product, qty: number, reason: string, direction: "in" | "out") => {
     const newStock = direction === "in"
-      ? (product.stock || 0) + qty
-      : Math.max(0, (product.stock || 0) - qty);
-    await updateDoc(doc(db, "products", product.id!), { stock: newStock });
+      ? parseFloat(((product.stock || 0) + qty).toFixed(4))
+      : parseFloat((Math.max(0, (product.stock || 0) - qty)).toFixed(4));
+    await updateDoc(doc(db, "products", product.id!), { stock: newStock, updatedAt: new Date().toISOString() });
     await addDoc(collection(db, "products", product.id!, "stockMovements"), {
       type: direction === "in" ? "manual_in" : "manual_out",
       direction, qty,
@@ -230,6 +237,12 @@ export default function Products() {
   };
 
   const margin = (p: Product) => p.costPrice > 0 ? (((p.sellingPrice - p.costPrice) / p.costPrice) * 100).toFixed(0) : null;
+
+  // ── Format stock display with up to 3 decimal places, strip trailing zeros ─
+  const fmtStock = (n: number) => {
+    if (Number.isInteger(n)) return String(n);
+    return parseFloat(n.toFixed(3)).toString();
+  };
 
   return (
     <div className="p-3 md:p-8">
@@ -324,12 +337,15 @@ export default function Products() {
               {paginated.map((product) => {
                 const isOut = product.trackInventory && product.stock <= 0;
                 const isLow = product.trackInventory && product.stock > 0 && product.stock <= product.minStockAlert;
+                const reserved = product.reservedStock || 0;
+                const available = Math.max(0, product.stock - reserved);
                 return (
                   <tr key={product.id} className={`hover:bg-gray-50 group ${isOut ? "opacity-60" : ""}`}>
                     <td className="px-5 py-4">
                       <p className="font-medium text-gray-800">{product.name}</p>
-                      <div className="flex gap-1.5 mt-0.5">
+                      <div className="flex gap-1.5 mt-0.5 flex-wrap">
                         {product.sellInFraction && <span className="text-[10px] text-blue-500">Fractions</span>}
+                        {FRACTIONAL_UNITS.includes(product.unit) && !product.sellInFraction && <span className="text-[10px] text-indigo-400">Decimal stock</span>}
                         {product.trackInventory  && <span className="text-[10px] text-green-500">Tracked</span>}
                       </div>
                     </td>
@@ -355,11 +371,18 @@ export default function Products() {
                     </td>
                     <td className="px-5 py-4">
                       {product.trackInventory ? (
-                        <div className="flex items-center gap-1">
-                          {isOut
-                            ? <span className="bg-red-100 text-red-600 text-xs px-2 py-0.5 rounded-full">Out</span>
-                            : <span className={`font-bold text-base ${isLow ? "text-yellow-500" : "text-gray-800"}`}>{product.stock}</span>}
-                          {isLow && !isOut && <span title="Low stock">⚠️</span>}
+                        <div className="flex flex-col gap-0.5">
+                          <div className="flex items-center gap-1">
+                            {isOut
+                              ? <span className="bg-red-100 text-red-600 text-xs px-2 py-0.5 rounded-full">Out</span>
+                              : <span className={`font-bold text-base ${isLow ? "text-yellow-500" : "text-gray-800"}`}>{fmtStock(product.stock)}</span>}
+                            {isLow && !isOut && <span title="Low stock">⚠️</span>}
+                          </div>
+                          {reserved > 0 && (
+                            <div className="text-[10px] text-orange-500">
+                              🔒 {fmtStock(reserved)} blocked · {fmtStock(available)} free
+                            </div>
+                          )}
                         </div>
                       ) : <span className="text-gray-400">—</span>}
                     </td>
@@ -368,11 +391,11 @@ export default function Products() {
                     </td>
                     <td className="px-5 py-4">
                       {isAdmin && (
-                        <div className="flex gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                        <div className="flex gap-1 flex-wrap opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                           <button onClick={() => handleEdit(product)} className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100">✏️ Edit</button>
                           <button onClick={() => handleDuplicate(product)} className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded hover:bg-gray-100">📋 Copy</button>
                           {product.trackInventory && <button onClick={() => setStockModal(product)} className="text-xs bg-green-50 text-green-600 px-2 py-1 rounded hover:bg-green-100">📦 Stock</button>}
-                          {product.trackInventory && <button onClick={() => setHistoryModal(product)} className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded hover:bg-purple-100">📋 History</button>}
+                          {product.trackInventory && <button onClick={() => setLedgerModal(product)} className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded hover:bg-purple-100">📒 Ledger</button>}
                           <button onClick={() => setDeleteConfirm(product)} className="text-xs bg-red-50 text-red-500 px-2 py-1 rounded hover:bg-red-100">🗑️</button>
                         </div>
                       )}
@@ -429,12 +452,15 @@ export default function Products() {
                         className={`px-3 py-1.5 rounded-lg text-sm border transition-all ${form.unit === u ? "bg-orange-500 text-white border-orange-500" : "border-gray-300 text-gray-600 hover:border-orange-300"}`}>{u}</button>
                     ))}
                   </div>
+                  {FRACTIONAL_UNITS.includes(form.unit) && (
+                    <p className="text-xs text-indigo-500 mt-1.5">ℹ️ {form.unit} automatically supports decimal stock quantities.</p>
+                  )}
                 </Field>
                 <div className="flex items-center gap-3">
                   <Toggle checked={form.sellInFraction} onChange={(v) => setForm({ ...form, sellInFraction: v })} />
                   <div>
                     <p className="text-sm font-medium text-gray-700">Sell in Fractions</p>
-                    <p className="text-xs text-gray-400">Allow quantities like 0.5, 0.25, 1.5</p>
+                    <p className="text-xs text-gray-400">Allow order quantities like 0.5, 0.25, 1.5</p>
                   </div>
                 </div>
                 <Field label="Barcode (Optional)">
@@ -531,13 +557,23 @@ export default function Products() {
                 </div>
                 {form.trackInventory && (
                   <div className="space-y-4 mt-2">
-                    <Field label="Current Stock Quantity">
-                      <input type="number" min="0" step={form.sellInFraction ? "0.01" : "1"} value={form.stock}
-                        onChange={(e) => setForm({ ...form, stock: Number(e.target.value) })} className={inputCls} />
+                    <Field label={`Current Stock Quantity${allowsDecimal(form) ? " (decimals supported)" : ""}`}>
+                      <input
+                        type="number" min="0"
+                        step={stockStep(form)}
+                        value={form.stock}
+                        onChange={(e) => setForm({ ...form, stock: parseFloat(e.target.value) || 0 })}
+                        className={inputCls}
+                      />
+                      {allowsDecimal(form) && (
+                        <p className="text-xs text-indigo-500 mt-1">
+                          You can enter decimal values like 2.5, 10.75, 0.250
+                        </p>
+                      )}
                     </Field>
                     <Field label="Minimum Stock Alert">
-                      <input type="number" min="0" value={form.minStockAlert}
-                        onChange={(e) => setForm({ ...form, minStockAlert: Number(e.target.value) })} placeholder="Alert when stock falls below this" className={inputCls} />
+                      <input type="number" min="0" step={stockStep(form)} value={form.minStockAlert}
+                        onChange={(e) => setForm({ ...form, minStockAlert: parseFloat(e.target.value) || 0 })} placeholder="Alert when stock falls below this" className={inputCls} />
                       <p className="text-xs text-gray-400 mt-1">⚠️ Warning shown when stock ≤ this value</p>
                     </Field>
                     <div>
@@ -550,8 +586,8 @@ export default function Products() {
                           <option value="percentage">Percentage %</option>
                         </select>
                         <div className="flex-1">
-                          <input type="number" min="0" step={form.safetyBuffer?.type === "percentage" ? "0.1" : "1"} value={form.safetyBuffer?.value || 0}
-                            onChange={(e) => setForm({ ...form, safetyBuffer: { type: form.safetyBuffer?.type || "fixed", value: Number(e.target.value) } })}
+                          <input type="number" min="0" step={form.safetyBuffer?.type === "percentage" ? "0.1" : stockStep(form)} value={form.safetyBuffer?.value || 0}
+                            onChange={(e) => setForm({ ...form, safetyBuffer: { type: form.safetyBuffer?.type || "fixed", value: parseFloat(e.target.value) || 0 } })}
                             placeholder={form.safetyBuffer?.type === "percentage" ? "e.g. 10%" : "e.g. 5 units"} className={inputCls} />
                           <p className="text-xs text-gray-400 mt-1">{form.safetyBuffer?.type === "percentage" ? "Keep this % of stock as buffer" : "Keep this many units as buffer"}</p>
                         </div>
@@ -589,7 +625,7 @@ export default function Products() {
       )}
 
       {stockModal  && isAdmin && <StockAdjustModal  product={stockModal}  onClose={() => setStockModal(null)}  onAdjust={handleStockAdjust} />}
-      {historyModal &&           <StockHistoryModal  product={historyModal} onClose={() => setHistoryModal(null)} />}
+      {ledgerModal &&            <StockLedgerModal   product={ledgerModal} onClose={() => setLedgerModal(null)} />}
       {deleteConfirm && isAdmin && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
@@ -635,6 +671,8 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 
 const inputCls = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300";
 
+const FRACTIONAL_UNITS_LOCAL: ProductUnit[] = ["KG", "Gram", "Liter", "ML"];
+
 function StockAdjustModal({ product, onClose, onAdjust }: {
   product: Product;
   onClose: () => void;
@@ -644,9 +682,17 @@ function StockAdjustModal({ product, onClose, onAdjust }: {
   const [qty, setQty]             = useState("");
   const [reason, setReason]       = useState("");
   const [saving, setSaving]       = useState(false);
+  const isDecimal = product.sellInFraction || FRACTIONAL_UNITS_LOCAL.includes(product.unit);
+  const step = isDecimal ? "0.001" : "1";
+  const parsedQty = parseFloat(qty) || 0;
   const preview = direction === "in"
-    ? (product.stock || 0) + (parseFloat(qty) || 0)
-    : Math.max(0, (product.stock || 0) - (parseFloat(qty) || 0));
+    ? parseFloat(((product.stock || 0) + parsedQty).toFixed(4))
+    : parseFloat((Math.max(0, (product.stock || 0) - parsedQty)).toFixed(4));
+
+  const QUICK_REASONS: Record<"in" | "out", string[]> = {
+    in:  ["New purchase / GRN", "Return from customer", "Stock correction", "Transfer in", "Opening stock"],
+    out: ["Damage / expired", "Sample given", "Stock correction", "Transfer out", "Internal use"],
+  };
 
   const handleSave = async () => {
     const q = parseFloat(qty);
@@ -657,10 +703,15 @@ function StockAdjustModal({ product, onClose, onAdjust }: {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
         <h3 className="text-lg font-semibold text-gray-800 mb-1">Stock Adjustment</h3>
-        <p className="text-sm text-gray-500 mb-4">{product.name} · Current: <strong>{product.stock} {product.unit}</strong></p>
+        <p className="text-sm text-gray-500 mb-4">
+          {product.name} · Current: <strong>{parseFloat((product.stock || 0).toFixed(4))} {product.unit}</strong>
+          {(product.reservedStock || 0) > 0 && (
+            <span className="ml-2 text-orange-500 text-xs">🔒 {product.reservedStock} blocked in orders</span>
+          )}
+        </p>
         <div className="grid grid-cols-2 gap-3 mb-4">
           {(["in","out"] as const).map((d) => (
             <button key={d} onClick={() => setDirection(d)}
@@ -672,14 +723,24 @@ function StockAdjustModal({ product, onClose, onAdjust }: {
         </div>
         <div className="space-y-3 mb-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Quantity ({product.unit}) *</label>
-            <input type="number" min="0.01" step={product.sellInFraction ? "0.01" : "1"}
-              value={qty} onChange={(e) => setQty(e.target.value)} placeholder={`e.g. 50 ${product.unit}`}
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Quantity ({product.unit}) *{isDecimal && <span className="text-indigo-500 font-normal ml-1">— decimals allowed</span>}
+            </label>
+            <input type="number" min="0.001" step={step}
+              value={qty} onChange={(e) => setQty(e.target.value)} placeholder={isDecimal ? `e.g. 2.5 ${product.unit}` : `e.g. 50 ${product.unit}`}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Reason *</label>
-            <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. New purchase, Damage write-off..."
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {QUICK_REASONS[direction].map((r) => (
+                <button key={r} type="button" onClick={() => setReason(r)}
+                  className={`text-xs px-2.5 py-1 rounded-full border transition-all ${reason === r ? "bg-orange-100 text-orange-700 border-orange-300" : "bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-300"}`}>
+                  {r}
+                </button>
+              ))}
+            </div>
+            <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Or type a custom reason…"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
           </div>
         </div>
@@ -700,71 +761,232 @@ function StockAdjustModal({ product, onClose, onAdjust }: {
   );
 }
 
-function StockHistoryModal({ product, onClose }: { product: Product; onClose: () => void }) {
-  const [movements, setMovements] = useState<Record<string, unknown>[]>([]);
+// ── Stock Ledger Modal ─────────────────────────────────────────────────────────
+// Shows full stock history: manual in/out + order reservations/releases
+// + which active orders are currently blocking stock
+interface StockMovement {
+  id: string;
+  type: string;
+  direction: "in" | "out";
+  qty: number;
+  stockBefore: number;
+  stockAfter: number;
+  reason?: string;
+  createdByName?: string;
+  createdAt: string;
+  orderId?: string;
+  orderNo?: string;
+}
+
+type LedgerTab = "history" | "blocked";
+
+function StockLedgerModal({ product, onClose }: { product: Product; onClose: () => void }) {
+  const [movements, setMovements] = useState<StockMovement[]>([]);
+  const [blockedOrders, setBlockedOrders] = useState<Order[]>([]);
   const [loading, setLoading]     = useState(true);
+  const [ordersLoading, setOrdersLoading] = useState(true);
+  const [tab, setTab]             = useState<LedgerTab>("history");
 
   useEffect(() => {
+    // Load stock movements
     getDocs(query(collection(db, "products", product.id!, "stockMovements"), orderBy("createdAt", "desc")))
-      .then((snap) => { setMovements(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); setLoading(false); })
+      .then((snap) => { setMovements(snap.docs.map((d) => ({ id: d.id, ...d.data() } as StockMovement))); setLoading(false); })
       .catch(() => setLoading(false));
+
+    // Load orders that have this product and are not yet delivered/cancelled
+    // Active statuses that block stock
+    const activeStatuses = ["pending", "packed", "assigned", "out_for_delivery", "attempted", "returned_to_warehouse"];
+    getDocs(query(collection(db, "orders"), where("status", "in", activeStatuses)))
+      .then((snap) => {
+        const orders = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as Order))
+          .filter((o) => o.items?.some((item) => item.productId === product.id));
+        setBlockedOrders(orders);
+        setOrdersLoading(false);
+      })
+      .catch(() => setOrdersLoading(false));
   }, [product.id]);
 
   const TYPE_LABELS: Record<string, string> = {
-    manual_in: "Stock In", manual_out: "Stock Out",
-    order_placed: "Order Placed", order_cancelled: "Order Cancelled",
+    manual_in:       "Stock In",
+    manual_out:      "Stock Out",
+    order_placed:    "Order Reserved",
+    order_cancelled: "Order Released",
+    order_delivered: "Delivered",
   };
+
+  const fmtDate = (iso: string) =>
+    new Date(iso).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+
+  const fmtQty = (n: number) => parseFloat(n.toFixed(4)).toString();
+
+  const STATUS_COLORS: Record<string, string> = {
+    pending:               "bg-yellow-100 text-yellow-700",
+    packed:                "bg-blue-100 text-blue-700",
+    assigned:              "bg-indigo-100 text-indigo-700",
+    out_for_delivery:      "bg-purple-100 text-purple-700",
+    attempted:             "bg-orange-100 text-orange-700",
+    returned_to_warehouse: "bg-gray-100 text-gray-700",
+  };
+
+  const totalBlocked = blockedOrders.reduce((sum, o) => {
+    const item = o.items?.find((i) => i.productId === product.id);
+    return sum + (item?.quantity || 0);
+  }, 0);
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+        {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <div>
             <h3 className="text-lg font-semibold text-gray-800">{product.name}</h3>
-            <p className="text-sm text-gray-500">Stock History · Current: {product.stock} {product.unit}</p>
-          </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          {loading
-            ? <div className="text-center py-10 text-gray-400">Loading...</div>
-            : movements.length === 0
-              ? <div className="text-center py-16 text-gray-400"><p className="text-3xl mb-2">📭</p><p>No history yet</p></div>
-              : (
-                <table className="w-full text-sm min-w-[400px]">
-                  <thead className="bg-gray-50 text-gray-400 text-xs uppercase tracking-wide sticky top-0">
-                    <tr>
-                      <th className="px-5 py-3 text-left">Date</th>
-                      <th className="px-5 py-3 text-left">Type</th>
-                      <th className="px-5 py-3 text-left">Reason</th>
-                      <th className="px-5 py-3 text-right">Qty</th>
-                      <th className="px-5 py-3 text-right">After</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {movements.map((m) => (
-                      <tr key={m.id as string} className="hover:bg-gray-50">
-                        <td className="px-5 py-3 text-gray-500 text-xs whitespace-nowrap">
-                          {new Date(m.createdAt as string).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
-                        </td>
-                        <td className="px-5 py-3">
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${m.direction === "in" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
-                            {TYPE_LABELS[m.type as string] ?? (m.type as string)}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3 text-gray-500 text-xs">
-                          <p>{String(m.reason ?? "—")}</p>
-                          {!!m.createdByName && <p className="text-gray-400">{String(m.createdByName)}</p>}
-                        </td>
-                        <td className={`px-5 py-3 text-right font-semibold ${m.direction === "in" ? "text-green-600" : "text-red-600"}`}>
-                          {m.direction === "in" ? "+" : "-"}{m.qty as number}
-                        </td>
-                        <td className="px-5 py-3 text-right font-medium text-gray-800">{m.stockAfter as number}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <div className="flex items-center gap-3 mt-0.5 flex-wrap">
+              <span className="text-sm text-gray-500">
+                Total stock: <strong>{fmtQty(product.stock || 0)} {product.unit}</strong>
+              </span>
+              {totalBlocked > 0 && (
+                <>
+                  <span className="text-sm text-orange-500">
+                    🔒 Blocked: <strong>{fmtQty(totalBlocked)} {product.unit}</strong>
+                  </span>
+                  <span className="text-sm text-green-600">
+                    ✅ Available: <strong>{fmtQty(Math.max(0, (product.stock || 0) - totalBlocked))} {product.unit}</strong>
+                  </span>
+                </>
               )}
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl flex-shrink-0">✕</button>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-0 border-b border-gray-100 px-6">
+          {([
+            { key: "history", label: "📋 Stock Ledger" },
+            { key: "blocked", label: `🔒 Blocked in Orders${blockedOrders.length > 0 ? ` (${blockedOrders.length})` : ""}` },
+          ] as const).map(({ key, label }) => (
+            <button key={key} onClick={() => setTab(key)}
+              className={`px-4 py-3 text-sm font-medium border-b-2 transition-all -mb-px ${tab === key ? "border-orange-500 text-orange-600" : "border-transparent text-gray-400 hover:text-gray-600"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto">
+          {tab === "history" && (
+            loading
+              ? <div className="text-center py-10 text-gray-400">Loading...</div>
+              : movements.length === 0
+                ? <div className="text-center py-16 text-gray-400"><p className="text-3xl mb-2">📭</p><p>No stock history yet</p></div>
+                : (
+                  <table className="w-full text-sm min-w-[500px]">
+                    <thead className="bg-gray-50 text-gray-400 text-xs uppercase tracking-wide sticky top-0">
+                      <tr>
+                        <th className="px-5 py-3 text-left">Date & Time</th>
+                        <th className="px-5 py-3 text-left">Type</th>
+                        <th className="px-5 py-3 text-left">Reason / By</th>
+                        <th className="px-5 py-3 text-right">Qty</th>
+                        <th className="px-5 py-3 text-right">Before</th>
+                        <th className="px-5 py-3 text-right">After</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {movements.map((m) => (
+                        <tr key={m.id} className="hover:bg-gray-50">
+                          <td className="px-5 py-3 text-gray-500 text-xs whitespace-nowrap">
+                            {fmtDate(m.createdAt)}
+                          </td>
+                          <td className="px-5 py-3">
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                              m.direction === "in"
+                                ? "bg-green-100 text-green-700"
+                                : "bg-red-100 text-red-700"
+                            }`}>
+                              {TYPE_LABELS[m.type] ?? m.type}
+                            </span>
+                            {m.orderNo && (
+                              <p className="text-[10px] text-blue-500 mt-0.5">Order #{m.orderNo}</p>
+                            )}
+                          </td>
+                          <td className="px-5 py-3 text-gray-600 text-xs">
+                            <p className="font-medium">{String(m.reason ?? "—")}</p>
+                            {m.createdByName && <p className="text-gray-400">by {m.createdByName}</p>}
+                          </td>
+                          <td className={`px-5 py-3 text-right font-semibold ${m.direction === "in" ? "text-green-600" : "text-red-600"}`}>
+                            {m.direction === "in" ? "+" : "−"}{fmtQty(m.qty)}
+                          </td>
+                          <td className="px-5 py-3 text-right text-gray-400 text-xs">{fmtQty(m.stockBefore)}</td>
+                          <td className="px-5 py-3 text-right font-medium text-gray-800">{fmtQty(m.stockAfter)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )
+          )}
+
+          {tab === "blocked" && (
+            ordersLoading
+              ? <div className="text-center py-10 text-gray-400">Loading...</div>
+              : blockedOrders.length === 0
+                ? (
+                  <div className="text-center py-16 text-gray-400">
+                    <p className="text-3xl mb-2">✅</p>
+                    <p className="font-medium text-gray-500">No stock blocked</p>
+                    <p className="text-xs mt-1">All stock is available — no active orders for this product</p>
+                  </div>
+                )
+                : (
+                  <div className="p-5 space-y-3">
+                    {/* Summary bar */}
+                    <div className="bg-orange-50 border border-orange-200 rounded-xl px-4 py-3 flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-orange-700">
+                          🔒 {fmtQty(totalBlocked)} {product.unit} blocked across {blockedOrders.length} order{blockedOrders.length > 1 ? "s" : ""}
+                        </p>
+                        <p className="text-xs text-orange-500 mt-0.5">
+                          Available stock: {fmtQty(Math.max(0, (product.stock || 0) - totalBlocked))} {product.unit}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Orders list */}
+                    {blockedOrders.map((order) => {
+                      const item = order.items?.find((i) => i.productId === product.id);
+                      if (!item) return null;
+                      return (
+                        <div key={order.id} className="bg-white border border-gray-200 rounded-xl p-4 hover:border-orange-200 transition-colors">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-semibold text-gray-800 text-sm">
+                                  {order.orderNo ? `#${order.orderNo}` : `Order ${order.id?.slice(-6)}`}
+                                </span>
+                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[order.status] ?? "bg-gray-100 text-gray-600"}`}>
+                                  {order.status.replace(/_/g, " ")}
+                                </span>
+                              </div>
+                              <p className="text-sm text-gray-600 mt-1">{order.customerName}</p>
+                              {order.customerArea && <p className="text-xs text-gray-400">{order.customerArea}</p>}
+                              <div className="flex gap-4 mt-2 text-xs text-gray-500 flex-wrap">
+                                <span>🧑 Agent: {order.agentName}</span>
+                                {order.deliveryPersonName && <span>🚚 {order.deliveryPersonName}</span>}
+                                <span>📅 {new Date(order.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</span>
+                              </div>
+                            </div>
+                            <div className="text-right flex-shrink-0">
+                              <p className="text-lg font-bold text-orange-600">{fmtQty(item.quantity)}</p>
+                              <p className="text-xs text-gray-400">{product.unit}</p>
+                              <p className="text-xs text-gray-500 mt-0.5">₹{item.total?.toFixed(2)}</p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )
+          )}
         </div>
       </div>
     </div>
