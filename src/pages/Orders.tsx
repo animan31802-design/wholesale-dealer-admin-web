@@ -581,7 +581,7 @@ export default function Orders() {
                         ↩️ Return
                       </button>
                     )}
-                    {user?.role === "admin" && (
+                    {(user?.role === "admin" || user?.role === "packing_staff") && (
                       <button onClick={() => setInvoiceOrder(order)}
                         className={`text-xs px-3 py-1.5 rounded-lg font-medium ${
                           order.invoiceNumber
@@ -1674,7 +1674,7 @@ export function OrderDetailPanel({
                 🚫 Cancel Order
               </button>
             )}
-            {isAdmin && (
+            {(isAdmin || panelUser?.role === "packing_staff") && (
               <button
                 onClick={() => onInvoice(order)}
                 className={`flex-1 py-2.5 rounded-xl text-sm font-medium ${
