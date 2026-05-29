@@ -182,8 +182,17 @@ function buildInvoiceHTML(params: {
   historicalDue: number;
   advancePaid: number;
   qrDataUrl?: string;
+  paperSize?: "a4" | "a5";
 }): string {
-  const { order, customer, biz, invoiceNumber, isGST, showDue, historicalDue, advancePaid, qrDataUrl } = params;
+  const { order, customer, biz, invoiceNumber, isGST, showDue, historicalDue, advancePaid, qrDataUrl, paperSize = "a4" } = params;
+
+  // Paper dimensions at 96dpi: A4=794px wide, A5=559px wide
+  // Content area = body width minus padding (18px each side)
+  const bodyWidth    = paperSize === "a5" ? 559 : 794;
+  const wrapperWidth = bodyWidth - 54;  // 27px margin each side
+  // Scale factor for font sizes (A5 = 559/794 ≈ 0.704)
+  const scale        = paperSize === "a5" ? 0.82 : 1;
+  const fs = (px: number) => `${Math.round(px * scale)}px`;
 
   const lineAmounts   = order.items.map((item) => computeLineAmounts(item, isGST));
   const totalTaxable  = round3(lineAmounts.reduce((s, a) => s + a.taxableValue, 0));
@@ -211,7 +220,7 @@ function buildInvoiceHTML(params: {
   const B  = "border:1px solid #000;";
   const BV = "border-left:1px solid #000;border-right:1px solid #000;";
   const P  = "padding:6px 7px;";
-  const F  = "font-size:11px;";
+  const F  = `font-size:${fs(11)};`;
   const V  = "vertical-align:middle;";
 
   const c  = `${B}${P}${F}${V}`;
@@ -338,13 +347,13 @@ function buildInvoiceHTML(params: {
     font-family:'NotoTamil',Arial,sans-serif;
     background:#fff;
     color:#000;
-    width:794px;
+    width:${bodyWidth}px;
     padding:18px;
   }
 
   .invoice-wrapper{
-    width:740px;
-    margin:30px auto 0 auto;
+    width:${wrapperWidth}px;
+    margin:${Math.round(30*scale)}px auto 0 auto;
   }
 
   table{
@@ -358,15 +367,15 @@ function buildInvoiceHTML(params: {
   }
 
   .title{
-    font-size:15px;
+    font-size:${fs(15)};
     font-weight:700;
     text-align:center;
-    padding:12px 0;
-    height: 50px
+    padding:${Math.round(12*scale)}px 0;
+    height: ${Math.round(50*scale)}px
   }
 
   .header-row td{
-    height:95px;
+    height:${Math.round(95*scale)}px;
   }
 
   .center{
@@ -382,11 +391,11 @@ function buildInvoiceHTML(params: {
   }
 
   .small{
-    font-size:10px;
+    font-size:${fs(10)};
   }
 
   .big{
-    font-size:18px;
+    font-size:${fs(18)};
     font-weight:700;
   }
 
@@ -401,8 +410,8 @@ function buildInvoiceHTML(params: {
     border-right:1px solid #000;
     border-top:none;
     border-bottom:none;
-    padding:8px 6px;
-    font-size:11px;
+    padding:${Math.round(8*scale)}px ${Math.round(6*scale)}px;
+    font-size:${fs(11)};
     vertical-align:middle;
   }
 
@@ -411,15 +420,15 @@ function buildInvoiceHTML(params: {
   }
 
   .summary td{
-    padding:5px 8px;
-    font-size:11px;
+    padding:${Math.round(5*scale)}px ${Math.round(8*scale)}px;
+    font-size:${fs(11)};
   }
 
   .signature td{
-    height:80px;
+    height:${Math.round(80*scale)}px;
     vertical-align:bottom !important;
-    padding-bottom:10px;
-    font-size:11px;
+    padding-bottom:${Math.round(10*scale)}px;
+    font-size:${fs(11)};
     font-weight:700;
     text-align:center;
   }
@@ -481,11 +490,11 @@ function buildInvoiceHTML(params: {
 
       <td colspan="6" style="${c}" class="center">
         <div style="display:flex;align-items:center;justify-content:center;gap:10px;">
-          <img src="/ptm_logo.jpeg" style="width:48px;height:48px;object-fit:contain;" />
+          <img src="/ptm_logo.jpeg" style="width:${Math.round(48*scale)}px;height:${Math.round(48*scale)}px;object-fit:contain;" />
           <div class="big">${esc(biz?.businessName) || "PTM MILL"}</div>
         </div>
 
-        <div style="margin-top:8px;font-size:10px;">
+        <div style="margin-top:8px;font-size:${fs(10)};">
           ${esc(addrParts)}
         </div>
       </td>
@@ -510,11 +519,11 @@ function buildInvoiceHTML(params: {
 
       <td colspan="2" style="${c}" class="center">
         <div style="display:flex;align-items:center;justify-content:center;gap:10px;">
-          <img src="/ptm_logo.jpeg" style="width:48px;height:48px;object-fit:contain;" />
+          <img src="/ptm_logo.jpeg" style="width:${Math.round(48*scale)}px;height:${Math.round(48*scale)}px;object-fit:contain;" />
           <div class="big">${esc(biz?.businessName) || "PTM MILL"}</div>
         </div>
 
-        <div style="margin-top:8px;font-size:10px;">
+        <div style="margin-top:8px;font-size:${fs(10)};">
           ${esc(addrParts)}
         </div>
       </td>
@@ -546,7 +555,7 @@ isGST
 
       <div class="small bold">CONSIGNOR</div>
 
-      <div style="margin-top:18px;font-size:14px;font-weight:700;">
+      <div style="margin-top:18px;font-size:${fs(14)};font-weight:700;">
         ${esc(biz?.businessName) || ""}
       </div>
 
@@ -560,7 +569,7 @@ isGST
 
       <div class="small bold">CONSIGNEE</div>
 
-      <div style="margin-top:12px;font-size:16px;font-weight:700;">
+      <div style="margin-top:12px;font-size:${fs(16)};font-weight:700;">
         ${esc(order.customerName)}
       </div>
 
@@ -570,7 +579,7 @@ isGST
 
       ${
         order.customerArea
-          ? `<div style="margin-top:4px;font-size:11px;color:#444;">Area: ${esc(order.customerArea)}</div>`
+          ? `<div style="margin-top:4px;font-size:${fs(11)};color:#444;">Area: ${esc(order.customerArea)}</div>`
           : ""
       }
 
@@ -590,19 +599,19 @@ isGST
 
         ${qrDataUrl ? `
         <div style="display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px;">
-          <img src="${qrDataUrl}" style="width:70px;height:70px;display:block;" />
-          <div style="font-size:7px;color:#555;text-align:center;">Scan to Pay</div>
+          <img src="${qrDataUrl}" style="width:${Math.round(70*scale)}px;height:${Math.round(70*scale)}px;display:block;" />
+          <div style="font-size:${fs(7)};color:#555;text-align:center;">Scan to Pay</div>
         </div>
         ` : `
         <div style="
-          width:70px;
-          height:70px;
+          width:${Math.round(70*scale)}px;
+          height:${Math.round(70*scale)}px;
           background:#f2f2f2;
           display:flex;
           align-items:center;
           justify-content:center;
           color:#888;
-          font-size:11px;
+          font-size:${fs(11)};
         ">
           QR
         </div>
@@ -618,7 +627,7 @@ isGST
 
       <div class="small bold">CONSIGNOR</div>
 
-      <div style="margin-top:18px;font-size:14px;font-weight:700;">
+      <div style="margin-top:18px;font-size:${fs(14)};font-weight:700;">
         ${biz?.businessName || ""}
       </div>
 
@@ -632,7 +641,7 @@ isGST
 
       <div class="small bold">CONSIGNEE</div>
 
-      <div style="margin-top:12px;font-size:16px;font-weight:700;">
+      <div style="margin-top:12px;font-size:${fs(16)};font-weight:700;">
         ${esc(order.customerName)}
       </div>
 
@@ -642,7 +651,7 @@ isGST
 
       ${
         order.customerArea
-          ? `<div style="margin-top:4px;font-size:11px;color:#444;">Area: ${esc(order.customerArea)}</div>`
+          ? `<div style="margin-top:4px;font-size:${fs(11)};color:#444;">Area: ${esc(order.customerArea)}</div>`
           : ""
       }
 
@@ -668,19 +677,19 @@ isGST
 
         ${qrDataUrl ? `
         <div style="display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px;">
-          <img src="${qrDataUrl}" style="width:70px;height:70px;display:block;" />
-          <div style="font-size:7px;color:#555;text-align:center;">Scan to Pay</div>
+          <img src="${qrDataUrl}" style="width:${Math.round(70*scale)}px;height:${Math.round(70*scale)}px;display:block;" />
+          <div style="font-size:${fs(7)};color:#555;text-align:center;">Scan to Pay</div>
         </div>
         ` : `
         <div style="
-          width:70px;
-          height:70px;
+          width:${Math.round(70*scale)}px;
+          height:${Math.round(70*scale)}px;
           background:#f2f2f2;
           display:flex;
           align-items:center;
           justify-content:center;
           color:#888;
-          font-size:11px;
+          font-size:${fs(11)};
         ">
           QR
         </div>
@@ -977,7 +986,8 @@ isGST
 export async function buildInvoicePDF(
   order: Order,
   customer?: Partial<Customer>,
-  options?: Partial<InvoiceOptions>
+  options?: Partial<InvoiceOptions>,
+  paperSize: "a4" | "a5" = "a4",
 ) {
   const [enrichedItems, biz] = await Promise.all([
     enrichItemsFromProducts(order.items),
@@ -1039,18 +1049,23 @@ export async function buildInvoicePDF(
   const html = buildInvoiceHTML({
     order: enrichedOrder, customer, biz, invoiceNumber,
     isGST, showDue, historicalDue, advancePaid, qrDataUrl,
+    paperSize,
   });
 
   // ── Render using a hidden iframe so the full HTML document renders correctly ──
   // A plain div cannot host <!DOCTYPE html> — styles get stripped and html2canvas
   // captures a blank page. An iframe creates a real document context.
+  // Paper dimensions at 96dpi: A4=794×1123, A5=559×794
+  const paperW = paperSize === "a5" ? 559 : 794;
+  const paperH = paperSize === "a5" ? 794 : 1123;
+
   const iframe = document.createElement("iframe");
   iframe.style.cssText = [
     "position:fixed",
     "left:-9999px",
     "top:-9999px",
-    "width:794px",
-    "height:1123px",   // A4 at 96dpi — iframe needs an explicit height
+    `width:${paperW}px`,
+    `height:${paperH}px`,
     "border:none",
     "opacity:0",
     "pointer-events:none",
@@ -1114,9 +1129,9 @@ export async function buildInvoicePDF(
       backgroundColor: "#ffffff",
       logging: false,
       imageTimeout: 15000,
-      width:  794,
+      width:  paperW,
       height: actualHeight,
-      windowWidth:  794,
+      windowWidth:  paperW,
       windowHeight: actualHeight,
     } as any);
 
@@ -1125,7 +1140,7 @@ export async function buildInvoicePDF(
     }
 
     // Build PDF with JPEG (reliable across all browsers, no corrupt-PNG issues)
-    const pdf  = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+    const pdf  = new jsPDF({ unit: "mm", format: paperSize === "a5" ? "a5" : "a4", orientation: "portrait" });
     const pdfW = pdf.internal.pageSize.getWidth();
     const pdfH = pdf.internal.pageSize.getHeight();
 
@@ -1159,11 +1174,12 @@ export async function buildInvoicePDF(
 export async function generateInvoicePDF(
   order: Order,
   customer?: Partial<Customer>,
-  options?: Partial<InvoiceOptions>
+  options?: Partial<InvoiceOptions>,
+  paperSize: "a4" | "a5" = "a4",
 ) {
   const isGST  = (options?.invoiceType ?? "estimate") === "gst";
   const prefix = isGST ? "invoice" : "estimate";
-  const { pdf } = await buildInvoicePDF(order, customer, options);
+  const { pdf } = await buildInvoicePDF(order, customer, options, paperSize);
   pdf.save(`${prefix}-${(order.id ?? "order").slice(0, 8)}.pdf`);
 }
 

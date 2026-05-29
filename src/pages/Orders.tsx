@@ -693,6 +693,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
   const [invoiceType, setInvoiceType] = useState<InvoiceType>(order.invoiceType ?? "estimate");
   const [billingMode, setBillingMode] = useState<BillingMode>(order.billingMode ?? "without_due");
   const [qrMode, setQrMode] = useState<"with_amount" | "without_amount">("without_amount");
+  const [paperSize, setPaperSize] = useState<"a4" | "a5">("a4");
   const [customerDue, setCustomerDue] = useState("");
   const [loadingDefaults, setLoadingDefaults] = useState(!hasInvoice); // only wait on first-time generation
 
@@ -736,6 +737,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
           if (biz.defaultBillingMode) setBillingMode(biz.defaultBillingMode);
         }
         setQrMode(biz.defaultQrMode ?? "without_amount");
+        setPaperSize((biz as any).defaultPaperSize ?? "a4");
       }
       setLoadingDefaults(false);
     }).catch(() => setLoadingDefaults(false));
@@ -763,6 +765,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
     invType: InvoiceType,
     billMode: BillingMode,
     qrModeVal: "with_amount" | "without_amount" = qrMode,
+    paperSizeOverride?: "a4" | "a5",
   ) => {
     setGenerating(true);
     if (pdfUrl) URL.revokeObjectURL(pdfUrl);
@@ -773,7 +776,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
         billingMode: billMode,
         customerDue: billMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
         qrMode: qrModeVal,
-      });
+      }, paperSizeOverride ?? paperSize);
       setInvoiceHtml(html);
       setPdfUrl(URL.createObjectURL(pdf.output("blob")));
       setModalState("preview");
@@ -862,7 +865,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
       billingMode,
       customerDue: billingMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
       qrMode,
-    });
+    }, paperSize);
     pdf.save(`${prefix}-${invoiceNumber}.pdf`);
   };
 
@@ -875,7 +878,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
         billingMode,
         customerDue: billingMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
         qrMode,
-      });
+      }, paperSize);
       const blob = pdf.output("blob");
       const file = new File([blob], `${prefix}-${invoiceNumber}.pdf`, { type: "application/pdf" });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -1157,6 +1160,29 @@ function InvoiceModal({ order, onClose, isAdmin }: {
               )}
             </div>
             <div className="flex gap-2 p-4 border-t border-gray-100 flex-shrink-0 flex-wrap">
+              {/* Paper size toggle — changing it re-renders the PDF */}
+              <div className="w-full flex items-center gap-2">
+                <span className="text-xs text-gray-500 font-medium">Paper:</span>
+                {(["a4", "a5"] as const).map((size) => (
+                  <button
+                    key={size}
+                    onClick={async () => {
+                      setPaperSize(size);
+                      await renderPdf(invoiceNumber, invoiceType, billingMode, qrMode, size);
+                    }}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-all ${
+                      paperSize === size
+                        ? "bg-orange-500 text-white border-orange-500"
+                        : "border-gray-300 text-gray-500 hover:border-orange-300"
+                    }`}
+                  >
+                    {size.toUpperCase()}
+                  </button>
+                ))}
+                <span className="text-xs text-gray-400 ml-1">
+                  {paperSize === "a5" ? "148 × 210 mm" : "210 × 297 mm"}
+                </span>
+              </div>
               <button onClick={onClose}
                 className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm hover:bg-gray-50">
                 Close

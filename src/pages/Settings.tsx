@@ -23,6 +23,7 @@ export interface BusinessSettings {
   defaultInvoiceType: "gst" | "estimate";
   defaultBillingMode: "with_due" | "without_due";
   defaultQrMode: "with_amount" | "without_amount";
+  defaultPaperSize: "a4" | "a5";
 }
 
 const EMPTY: BusinessSettings = {
@@ -45,6 +46,7 @@ const EMPTY: BusinessSettings = {
   defaultInvoiceType: "estimate",
   defaultBillingMode: "without_due",
   defaultQrMode: "without_amount",
+  defaultPaperSize: "a4",
 };
 
 const SETTINGS_DOC = "settings/business";
@@ -396,6 +398,30 @@ export default function Settings() {
                 {form.defaultQrMode === "with_amount"
                   ? "QR will encode the exact balance due. Customer can still change it in their UPI app."
                   : "QR encodes only your UPI ID. Customer types the amount — safer for partial payments."}
+              </p>
+            </Field>
+            <Field label="Default Paper Size">
+              <div className="flex gap-2">
+                {(["a4", "a5"] as const).map((size) => (
+                  <button
+                    key={size}
+                    type="button"
+                    onClick={() => set("defaultPaperSize", size)}
+                    className={`flex-1 py-2.5 rounded-xl border-2 text-sm font-semibold transition-all ${
+                      (form.defaultPaperSize || "a4") === size
+                        ? "border-orange-500 bg-orange-50 text-orange-700"
+                        : "border-gray-200 text-gray-500 hover:border-gray-300"
+                    }`}
+                  >
+                    {size.toUpperCase()}
+                    <span className="block text-xs font-normal text-gray-400 mt-0.5">
+                      {size === "a4" ? "210 × 297 mm" : "148 × 210 mm"}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-gray-400 mt-1">
+                Used when printing invoices. Can be overridden per print in the invoice preview.
               </p>
             </Field>
             <Field label="Invoice Footer Message" span={2}>
