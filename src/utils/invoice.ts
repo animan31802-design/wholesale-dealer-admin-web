@@ -237,10 +237,10 @@ function buildInvoiceHTML(params: {
       <td style="${cv}text-align:center">${item.quantity}</td>
       <td style="${cv}text-align:center">${esc(item.unit)}</td>
       <td style="${cv}text-align:right">${taxableValue.toFixed(3)}</td>
-      <td style="${cv}text-align:center">${gstPct > 0 ? `${cgstRate}%` : ""}</td>
-      <td style="${cv}text-align:right">${gstPct > 0 ? lineCGST.toFixed(3) : ""}</td>
-      <td style="${cv}text-align:center">${gstPct > 0 ? `${cgstRate}%` : ""}</td>
-      <td style="${cv}text-align:right">${gstPct > 0 ? lineSGST.toFixed(3) : ""}</td>
+      <td style="${cv}text-align:center">${gstPct > 0 ? `${cgstRate}%` : "0%"}</td>
+      <td style="${cv}text-align:right">${gstPct > 0 ? lineCGST.toFixed(3) : "0"}</td>
+      <td style="${cv}text-align:center">${gstPct > 0 ? `${cgstRate}%` : "0%"}</td>
+      <td style="${cv}text-align:right">${gstPct > 0 ? lineSGST.toFixed(3) : "0"}</td>
       <td style="${cv}text-align:right;font-weight:600">${lineTotal.toFixed(2)}</td>
     </tr>`;
   }).join("");
@@ -348,12 +348,12 @@ function buildInvoiceHTML(params: {
     background:#fff;
     color:#000;
     width:${bodyWidth}px;
-    padding:18px;
+    padding:8px 10px;
   }
 
   .invoice-wrapper{
     width:${wrapperWidth}px;
-    margin:${Math.round(30*scale)}px auto 0 auto;
+    margin:4px auto 0 auto;
   }
 
   table{
@@ -483,7 +483,7 @@ function buildInvoiceHTML(params: {
     isGST
       ? `
       <td colspan="3" style="${c};text-align:left;padding-left:14px;">
-        ${biz?.gstin ? `<div class="small"><b>GSTIN:</b> ${esc(biz.gstin)}</div>` : ""}
+        ${biz?.gstin ? `<div style="font-size:${fs(12)};font-weight:700;">GST No.: ${esc(biz.gstin)}</div>` : ""}
         ${biz?.phone ? `<div class="small" style="margin-top:8px;"><b>MOBILE:</b> ${esc(biz.phone)}</div>` : ""}
         ${biz?.email ? `<div class="small" style="margin-top:8px;"><b>EMAIL:</b> ${esc(biz.email)}</div>` : ""}
       </td>
@@ -579,7 +579,13 @@ isGST
 
       ${
         order.customerArea
-          ? `<div style="margin-top:4px;font-size:${fs(11)};color:#444;">Area: ${esc(order.customerArea)}</div>`
+          ? `<div style="margin-top:4px;font-size:${fs(11)};color:#444;">${esc(order.customerArea)}</div>`
+          : ""
+      }
+
+      ${
+        customer?.gstin
+          ? `<div style="margin-top:6px;font-size:${fs(12)};font-weight:700;">GST No.: ${esc(customer.gstin)}</div>`
           : ""
       }
 
@@ -651,7 +657,7 @@ isGST
 
       ${
         order.customerArea
-          ? `<div style="margin-top:4px;font-size:${fs(11)};color:#444;">Area: ${esc(order.customerArea)}</div>`
+          ? `<div style="margin-top:4px;font-size:${fs(11)};color:#444;">${esc(order.customerArea)}</div>`
           : ""
       }
 
@@ -764,19 +770,19 @@ isGST
       </td>
 
       <td>
-        ${gstPct > 0 ? `${cgstRate}%` : ""}
+        ${gstPct > 0 ? `${cgstRate}%` : "0%"}
       </td>
 
       <td class="right">
-        ${gstPct > 0 ? lineCGST.toFixed(3) : ""}
+        ${gstPct > 0 ? lineCGST.toFixed(3) : "0"}
       </td>
 
       <td>
-        ${gstPct > 0 ? `${cgstRate}%` : ""}
+        ${gstPct > 0 ? `${cgstRate}%` : "0%"}
       </td>
 
       <td class="right">
-        ${gstPct > 0 ? lineSGST.toFixed(3) : ""}
+        ${gstPct > 0 ? lineSGST.toFixed(3) : "0"}
       </td>
 
       <td class="right bold">
@@ -884,7 +890,7 @@ isGST
       ${totalSGST.toFixed(3)}
     </td>
 
-    <td style="${c};text-align:right;font-weight:700;">
+    <td style="${c};text-align:right;font-weight:700;font-size:${fs(14)};">
       ${computedTotal.toFixed(2)}
     </td>
 
@@ -900,7 +906,7 @@ isGST
       TOTALS
     </td>
 
-    <td style="${c};text-align:right;font-weight:700;">
+    <td style="${c};text-align:right;font-weight:700;font-size:${fs(14)};">
       ${computedTotal.toFixed(2)}
     </td>
 
@@ -909,8 +915,6 @@ isGST
   `}
 
   <!-- SUMMARY ROWS -->
-
-  ${summaryRow("Bill Total", computedTotal.toFixed(2))}
 
   ${dueRows}
 
