@@ -748,16 +748,15 @@ function InvoiceModal({ order, onClose, isAdmin }: {
     return () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl); };
   }, [pdfUrl]);
 
-  // Auto-render PDF when entering "view" state (existing invoice)
+  // Auto-render PDF when entering "view" state — wait for customerData to be ready
   useEffect(() => {
-    if (modalState === "view" && !pdfUrl && !generating) {
-      // Defer past React's commit phase so it doesn't compete with rendering
+    if (modalState === "view" && !pdfUrl && !generating && !loadingDue) {
       const t = setTimeout(() => {
-        renderPdf(order.invoiceNumber!, order.invoiceType ?? "estimate", order.billingMode ?? "without_due");
+        renderPdf(order.invoiceNumber!, order.invoiceType ?? "estimate", order.billingMode ?? "without_due", qrMode, undefined, customerData);
       }, 50);
       return () => clearTimeout(t);
     }
-  }, [modalState]);
+  }, [modalState, loadingDue, customerData]);
 
   // ── Core render — NEVER touches the invoice counter ──────────────
   const renderPdf = async (
@@ -766,12 +765,14 @@ function InvoiceModal({ order, onClose, isAdmin }: {
     billMode: BillingMode,
     qrModeVal: "with_amount" | "without_amount" = qrMode,
     paperSizeOverride?: "a4" | "a5",
+    customerOverride?: any,
   ) => {
     setGenerating(true);
     if (pdfUrl) URL.revokeObjectURL(pdfUrl);
+    const custData = customerOverride !== undefined ? customerOverride : customerData;
     try {
       const orderWithMeta = { ...order, invoiceNumber: invNum, invoiceType: invType, billingMode: billMode };
-      const { pdf, html } = await buildInvoicePDF(orderWithMeta as any, customerData || undefined, {
+      const { pdf, html } = await buildInvoicePDF(orderWithMeta as any, custData || undefined, {
         invoiceType: invType,
         billingMode: billMode,
         customerDue: billMode === "with_due" ? parseFloat(customerDue) || 0 : 0,

@@ -237,10 +237,10 @@ function buildInvoiceHTML(params: {
       <td style="${cv}text-align:center">${item.quantity}</td>
       <td style="${cv}text-align:center">${esc(item.unit)}</td>
       <td style="${cv}text-align:right">${taxableValue.toFixed(3)}</td>
-      <td style="${cv}text-align:center">${gstPct > 0 ? `${cgstRate}%` : "0%"}</td>
-      <td style="${cv}text-align:right">${gstPct > 0 ? lineCGST.toFixed(3) : "0"}</td>
-      <td style="${cv}text-align:center">${gstPct > 0 ? `${cgstRate}%` : "0%"}</td>
-      <td style="${cv}text-align:right">${gstPct > 0 ? lineSGST.toFixed(3) : "0"}</td>
+      <td style="${cv}text-align:center">${gstPct > 0 ? `${cgstRate}%` : "0.0%"}</td>
+      <td style="${cv}text-align:right">${gstPct > 0 ? lineCGST.toFixed(3) : "0.000"}</td>
+      <td style="${cv}text-align:center">${gstPct > 0 ? `${cgstRate}%` : "0.0%"}</td>
+      <td style="${cv}text-align:right">${gstPct > 0 ? lineSGST.toFixed(3) : "0.000"}</td>
       <td style="${cv}text-align:right;font-weight:600">${lineTotal.toFixed(2)}</td>
     </tr>`;
   }).join("");
@@ -756,7 +756,8 @@ isGST
       <td>${i + 1}</td>
 
       <td colspan="2" style="text-align:left;padding-left:10px;">
-        ${item.productName}
+        <div>${item.productName}</div>
+        <div style="font-size:${fs(9)};color:#555;margin-top:2px;">₹${item.price.toFixed(2)} / ${item.unit}</div>
       </td>
 
       <td>${item.hsn || ""}</td>
@@ -770,19 +771,19 @@ isGST
       </td>
 
       <td>
-        ${gstPct > 0 ? `${cgstRate}%` : "0%"}
+        ${gstPct > 0 ? `${cgstRate}%` : "0.0%"}
       </td>
 
       <td class="right">
-        ${gstPct > 0 ? lineCGST.toFixed(3) : "0"}
+        ${gstPct > 0 ? lineCGST.toFixed(3) : "0.000"}
       </td>
 
       <td>
-        ${gstPct > 0 ? `${cgstRate}%` : "0%"}
+        ${gstPct > 0 ? `${cgstRate}%` : "0.0%"}
       </td>
 
       <td class="right">
-        ${gstPct > 0 ? lineSGST.toFixed(3) : "0"}
+        ${gstPct > 0 ? lineSGST.toFixed(3) : "0.000"}
       </td>
 
       <td class="right bold">
