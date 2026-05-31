@@ -8,6 +8,7 @@ import {
 import { db } from "../firebase/config";
 import { Order, AppUser } from "../types";
 import { useAuthStore } from "../store/authStore";
+import { useModalKeyboard } from "../hooks/useModalKeyboard";
 import { buildInvoicePDF } from "../utils/invoice";
 import Pagination from "../components/Pagination";
 import { Customer, InvoiceType, BillingMode } from "../types";
@@ -1230,6 +1231,9 @@ function AssignDeliveryModal({ order, deliveryUsers, onAssign, onClose, smartReg
     : deliveryUsers;
   const hasMatches = matchedAgents.length > 0;
 
+  const handleAssignConfirm = () => { if (!selectedPerson) return; onAssign(order.id!, selectedPerson, vehicleNumber.trim()); };
+  useModalKeyboard({ onClose, onConfirm: handleAssignConfirm, disabled: !selectedPerson });
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
@@ -1746,6 +1750,7 @@ function ReceiveBackModal({ order, onClose, onDone }: {
       setSaving(false);
     }
   };
+  useModalKeyboard({ onClose, onConfirm: handleSubmit, disabled: saving });
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
@@ -1823,6 +1828,7 @@ function ReassignDeliveryModal({ order, deliveryUsers, onClose, onDone, smartReg
       setSaving(false);
     }
   };
+  useModalKeyboard({ onClose, onConfirm: handleReassign, disabled: !selectedId || saving });
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
@@ -1990,6 +1996,8 @@ function CancelOrderModal({
     }
   };
 
+  useModalKeyboard({ onClose, onConfirm: () => { if (reason.trim() && !saving) handleCancel(); }, disabled: saving });
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
       <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
@@ -2113,6 +2121,8 @@ function BulkAssignModal({
   const regionNames = selectedOrders
     ? [...new Set(selectedOrders.map(o => (o as any).regionName).filter(Boolean))]
     : [];
+
+  useModalKeyboard({ onClose, onConfirm: () => { if (selectedPerson && !saving) handleAssign(); }, disabled: !selectedPerson || saving });
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -2313,6 +2323,7 @@ function PartialReturnModal({ order, onClose, onDone }: {
     }
   };
 
+    useModalKeyboard({ onClose, onConfirm: () => { if (hasReturns && reason.trim() && !saving) handleSubmit(); }, disabled: !hasReturns || saving });
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col">

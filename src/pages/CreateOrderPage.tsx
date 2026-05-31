@@ -6,6 +6,7 @@ import {
 import { db } from "../firebase/config";
 import { Customer, Product, Order, OrderItem } from "../types";
 import { useAuthStore } from "../store/authStore";
+import { useModalKeyboard } from "../hooks/useModalKeyboard";
 import { useTamilSearch } from "../utils/UseTamilSearch";
 import { TamilSearchInput } from "../components/TamilSearchInput";
 
@@ -125,11 +126,18 @@ function QtyDialog({
   product: Product; currentQty: number;
   onConfirm: (qty: number) => void; onDismiss: () => void;
 }) {
-  const [input, setInput] = useState(currentQty > 0 ? fmtQty(currentQty) : "");
+  const [input, setInput] = useState("");
   const qty       = parseFloat(input) || 0;
   const avail     = availableQty(product);
   const slabPrice = getSlabPrice(product, qty);
   const availText = product.trackInventory ? fmtQty(avail) : "∞";
+
+  const handleConfirm = () => {
+    if (!input || qty <= 0) return;
+    const capped = product.trackInventory ? Math.min(qty, avail) : qty;
+    onConfirm(capped);
+  };
+  useModalKeyboard({ onClose: onDismiss, onConfirm: handleConfirm, disabled: !input || qty <= 0 });
 
   return (
     <div
@@ -204,6 +212,7 @@ function BackDraftDialog({
 }: {
   customerName: string; onSave: () => void; onDiscard: () => void; onCancel: () => void;
 }) {
+  useModalKeyboard({ onClose: onCancel, onConfirm: onSave });
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
       <div className="bg-white rounded-2xl p-6 w-80 shadow-2xl">

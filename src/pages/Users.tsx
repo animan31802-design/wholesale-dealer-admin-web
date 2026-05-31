@@ -7,6 +7,7 @@ import { db } from "../firebase/config";
 import { AppUser, UserRole, Region } from "../types";
 import { useTamilSearch } from "../utils/UseTamilSearch";
 import { TamilSearchInput } from "../components/TamilSearchInput";
+import { useModalKeyboard } from "../hooks/useModalKeyboard";
 import { useAuthStore } from "../store/authStore";
 
 export default function Users() {
@@ -15,6 +16,7 @@ export default function Users() {
   const [showForm, setShowForm] = useState(false);
   const [showRegionModal, setShowRegionModal] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<AppUser | null>(null);
+  useModalKeyboard({ onClose: () => { setShowForm(false); setEditUser(null); setShowRegionModal(false); }, confirmOnEnter: false });
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({ name: "", email: "", password: "", phone: "", role: "field_agent" as UserRole });
   const [submitting, setSubmitting] = useState(false);

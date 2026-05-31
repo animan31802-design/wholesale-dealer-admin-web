@@ -26,6 +26,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { AppUser, Order } from "../types";
+import { useModalKeyboard } from "../hooks/useModalKeyboard";
 import { useAuthStore } from "../store/authStore";
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -127,7 +128,7 @@ function CollectModal({
   };
 
   const remaining = Math.max(0, cashInHand - (parseFloat(amount) || 0));
-
+  useModalKeyboard({ onClose, onConfirm: handleCollect, disabled: saving || !amount.trim() });
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">

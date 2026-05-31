@@ -170,6 +170,165 @@ async function generateUpiQrDataUrl(
   }
 }
 
+
+// ─── Shared page styles (used by both page 1 and continuation pages) ──────────
+
+function buildPageStyles(scale: number, fs: (n: number) => string, bodyWidth: number, wrapperWidth: number): string {
+  return `
+  @font-face {
+    font-family: 'NotoTamil';
+    src: url('data:font/truetype;base64,${NOTO_TAMIL_REGULAR_B64}') format('truetype');
+    font-weight: normal;
+    font-display: block;
+  }
+  @font-face {
+    font-family: 'NotoTamil';
+    src: url('data:font/truetype;base64,${NOTO_TAMIL_BOLD_B64}') format('truetype');
+    font-weight: bold;
+    font-display: block;
+  }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  body{
+    font-family:'NotoTamil',Arial,sans-serif;
+    background:#fff; color:#000;
+    width:${bodyWidth}px;
+    padding:8px 10px;
+  }
+  .invoice-wrapper{ width:${wrapperWidth}px; margin:4px auto 0 auto; }
+  table{ width:100%; border-collapse:collapse; table-layout:fixed; }
+  td,th{ vertical-align:middle !important; }
+  .title{ font-size:${fs(15)}; font-weight:700; text-align:center; padding:${Math.round(12*scale)}px 0; height:${Math.round(50*scale)}px }
+  .header-row td{ height:${Math.round(95*scale)}px; }
+  .center{ text-align:center; }
+  .right{ text-align:right; }
+  .bold{ font-weight:700; }
+  .small{ font-size:${fs(10)}; }
+  .big{ font-size:${fs(18)}; font-weight:700; }
+  .item-head{ background:#f2f2f2; font-weight:700; text-align:center; }
+  .item-row td{
+    border-left:1px solid #000; border-right:1px solid #000;
+    border-top:none; border-bottom:none;
+    padding:${Math.round(8*scale)}px ${Math.round(6*scale)}px;
+    font-size:${fs(11)}; vertical-align:middle;
+  }
+  .item-last td{ border-bottom:1px solid #000 !important; }
+  .summary td{ padding:${Math.round(5*scale)}px ${Math.round(8*scale)}px; font-size:${fs(11)}; }
+  .signature td{
+    height:${Math.round(80*scale)}px; vertical-align:bottom !important;
+    padding-bottom:${Math.round(10*scale)}px;
+    font-size:${fs(11)}; font-weight:700; text-align:center;
+  }
+  .cont-header{
+    font-size:${fs(10)}; text-align:right; padding:4px 6px;
+    border:1px solid #000; font-weight:600; color:#333;
+    margin-bottom:2px;
+  }
+  `;
+}
+
+// ─── Continuation page builder ────────────────────────────────────────────────
+
+function buildContinuationHTML(params: {
+  pageNum: number;
+  totalPages: number;
+  invoiceNumber: string;
+  isGST: boolean;
+  itemRows: string;        // pre-built <tr> strings for this page's items
+  isLastPage: boolean;
+  summaryBlock: string;    // totals+summary+signature+footer HTML (only on last page)
+  colspan: number;
+  c: string;               // cell style
+  scale: number;
+  fs: (n: number) => string;
+  bodyWidth: number;
+  wrapperWidth: number;
+}): string {
+  const { pageNum, totalPages, invoiceNumber, isGST, itemRows, isLastPage, summaryBlock, colspan, c, scale, fs, bodyWidth, wrapperWidth } = params;
+  const B  = "border:1px solid #000;";
+  const P  = "padding:6px 7px;";
+  const F  = `font-size:${fs(11)};`;
+  const V  = "vertical-align:middle;";
+  const cb = `${B}${P}${F}${V}`;
+
+  const colgroup = isGST ? `
+  <colgroup>
+    <col style="width:4%">
+    <col style="width:12%">
+    <col style="width:12%">
+    <col style="width:8%">
+    <col style="width:6%">
+    <col style="width:6%">
+    <col style="width:12%">
+    <col style="width:7%">
+    <col style="width:8%">
+    <col style="width:7%">
+    <col style="width:8%">
+    <col style="width:12%">
+  </colgroup>` : `
+  <colgroup>
+    <col style="width:6%">
+    <col style="width:15%">
+    <col style="width:40%">
+    <col style="width:12%">
+    <col style="width:12%">
+    <col style="width:15%">
+  </colgroup>`;
+
+  const colHeaders = isGST ? `
+  <tr class="item-head">
+    <td style="${cb}">SL</td>
+    <td colspan="2" style="${cb}">DESCRIPTION</td>
+    <td style="${cb}">HSN</td>
+    <td style="${cb}">QTY</td>
+    <td style="${cb}">UOM</td>
+    <td style="${cb}">TAXABLE VALUE</td>
+    <td style="${cb}">CGST%</td>
+    <td style="${cb}">CGST</td>
+    <td style="${cb}">SGST%</td>
+    <td style="${cb}">SGST</td>
+    <td style="${cb}">TOTAL Rs.</td>
+  </tr>` : `
+  <tr class="item-head">
+    <td style="${cb}">SL</td>
+    <td style="${cb}">UNIT PRICE</td>
+    <td style="${cb}">DESCRIPTION</td>
+    <td style="${cb}">QTY</td>
+    <td style="${cb}">UOM</td>
+    <td style="${cb}">TOTAL Rs.</td>
+  </tr>`;
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>${buildPageStyles(scale, fs, bodyWidth, wrapperWidth)}</style>
+</head>
+<body>
+<div class="invoice-wrapper">
+
+  <!-- CONTINUATION HEADER -->
+  <div class="cont-header">
+    TAX INVOICE &nbsp;|&nbsp; Invoice No: ${invoiceNumber} &nbsp;|&nbsp; Page ${pageNum} of ${totalPages}
+  </div>
+
+  <table>
+  ${colgroup}
+
+  ${colHeaders}
+
+  ${itemRows}
+
+  ${isLastPage ? summaryBlock : `
+  <tr class="item-row item-last">
+    <td colspan="${colspan}" style="text-align:center;font-style:italic;font-size:${fs(9)};color:#666;">...continued on next page</td>
+  </tr>`}
+
+  </table>
+</div>
+</body>
+</html>`;
+}
+
 // ─── HTML invoice builder ─────────────────────────────────────────────────────
 
 function buildInvoiceHTML(params: {
@@ -183,8 +342,9 @@ function buildInvoiceHTML(params: {
   advancePaid: number;
   qrDataUrl?: string;
   paperSize?: "a4" | "a5";
+  suppressSummary?: boolean;  // true on page 1 when there are continuation pages
 }): string {
-  const { order, customer, biz, invoiceNumber, isGST, showDue, historicalDue, advancePaid, qrDataUrl, paperSize = "a4" } = params;
+  const { order, customer, biz, invoiceNumber, isGST, showDue, historicalDue, advancePaid, qrDataUrl, paperSize = "a4", suppressSummary = false } = params;
 
   // Paper dimensions at 96dpi: A4=794px wide, A5=559px wide
   // Content area = body width minus padding (18px each side)
@@ -859,124 +1019,62 @@ isGST
   </tr>
   `}
 
-  <!-- TOTALS -->
+  <!-- TOTALS + SUMMARY (suppressed on page 1 when continuation pages follow) -->
+
+  ${!suppressSummary ? `
 
   ${isGST ? `
-
   <tr>
-
     <td style="${c}"></td>
-
-    <td colspan="2" style="${c};font-weight:700;">
-      TOTALS
-    </td>
-
+    <td colspan="2" style="${c};font-weight:700;">TOTALS</td>
+    <td style="${c}"></td><td style="${c}"></td><td style="${c}"></td>
+    <td style="${c};text-align:right;font-weight:700;">${totalTaxable.toFixed(3)}</td>
     <td style="${c}"></td>
+    <td style="${c};text-align:right;font-weight:700;">${totalCGST.toFixed(3)}</td>
     <td style="${c}"></td>
-    <td style="${c}"></td>
-
-    <td style="${c};text-align:right;font-weight:700;">
-      ${totalTaxable.toFixed(3)}
-    </td>
-
-    <td style="${c}"></td>
-
-    <td style="${c};text-align:right;font-weight:700;">
-      ${totalCGST.toFixed(3)}
-    </td>
-
-    <td style="${c}"></td>
-
-    <td style="${c};text-align:right;font-weight:700;">
-      ${totalSGST.toFixed(3)}
-    </td>
-
-    <td style="${c};text-align:right;font-weight:700;font-size:${fs(14)};">
-      ${computedTotal.toFixed(2)}
-    </td>
-
-  </tr>
-
-  ` : `
-
+    <td style="${c};text-align:right;font-weight:700;">${totalSGST.toFixed(3)}</td>
+    <td style="${c};text-align:right;font-weight:700;font-size:${fs(14)};">${computedTotal.toFixed(2)}</td>
+  </tr>` : `
   <tr>
-
     <td style="${c}"></td>
-
-    <td colspan="4" style="${c};font-weight:700;">
-      TOTALS
-    </td>
-
-    <td style="${c};text-align:right;font-weight:700;font-size:${fs(14)};">
-      ${computedTotal.toFixed(2)}
-    </td>
-
-  </tr>
-
-  `}
-
-  <!-- SUMMARY ROWS -->
+    <td colspan="4" style="${c};font-weight:700;">TOTALS</td>
+    <td style="${c};text-align:right;font-weight:700;font-size:${fs(14)};">${computedTotal.toFixed(2)}</td>
+  </tr>`}
 
   ${dueRows}
-
   ${advanceRow}
-
   ${balanceRow}
 
-  <!-- CASH -->
-
   <tr>
-    <td colspan="${colspan - 1}"
-      style="${c};text-align:right;font-weight:700;">
-      CASH COLLECTION
-    </td>
-
+    <td colspan="${colspan - 1}" style="${c};text-align:right;font-weight:700;">CASH COLLECTION</td>
     <td style="${c}"></td>
   </tr>
 
-  <!-- WORDS -->
-
   <tr>
-    <td colspan="${colspan}"
-      style="${c};text-align:center;">
+    <td colspan="${colspan}" style="${c};text-align:center;">
       ${numberToWords(amountForWords)} Only
     </td>
   </tr>
 
-  <!-- SIGN -->
-
   <tr class="signature">
-
-    <td colspan="${Math.floor(colspan / 2)}"
-      style="${c}">
-      Proprietor Signature
-    </td>
-
-    <td colspan="${colspan - Math.floor(colspan / 2)}"
-      style="${c}">
-      Receiver Signature
-    </td>
-
+    <td colspan="${Math.floor(colspan / 2)}" style="${c}">Proprietor Signature</td>
+    <td colspan="${colspan - Math.floor(colspan / 2)}" style="${c}">Receiver Signature</td>
   </tr>
-
-  <!-- FOOTER -->
 
   <tr>
-
-    <td colspan="${colspan}"
-      style="${c};text-align:center;">
-
-      <div>
-        ${(biz as any)?.invoiceFooterLine1 || "This Is Computer Based Invoice"}
-      </div>
-
-      <div style="margin-top:4px;">
-        ${biz?.invoiceFooter || "Thank you! Visit Again"}
-      </div>
-
+    <td colspan="${colspan}" style="${c};text-align:center;">
+      <div>${(biz as any)?.invoiceFooterLine1 || "This Is Computer Based Invoice"}</div>
+      <div style="margin-top:4px;">${biz?.invoiceFooter || "Thank you! Visit Again"}</div>
     </td>
-
   </tr>
+
+  ` : `
+  <tr class="item-row item-last">
+    <td colspan="${colspan}" style="text-align:center;font-style:italic;font-size:${fs(9)};color:#666;border:1px solid #000;">
+      ...continued on next page
+    </td>
+  </tr>
+  `}
 
 </table>
 
@@ -1051,127 +1149,335 @@ export async function buildInvoicePDF(
     ? await generateUpiQrDataUrl(upiId, (biz?.businessName || "Payment").trim(), qrAmount, withAmount)
     : "";
 
+  // ── Shared layout constants (mirrored from buildInvoiceHTML) ───────────────
+  const paperW      = paperSize === "a5" ? 559 : 794;
+  const paperH      = paperSize === "a5" ? 794 : 1123;
+  const bodyWidth   = paperW;
+  const wrapperWidth = bodyWidth - 54;
+  const scale       = paperSize === "a5" ? 0.82 : 1;
+  const fs          = (px: number) => `${Math.round(px * scale)}px`;
+  const colspan     = isGST ? 12 : 6;
+  const B  = "border:1px solid #000;";
+  const BV = "border-left:1px solid #000;border-right:1px solid #000;";
+  const P  = "padding:6px 7px;";
+  const F  = `font-size:${fs(11)};`;
+  const V  = "vertical-align:middle;";
+  const c  = `${B}${P}${F}${V}`;
+  const cv = `${BV}${P}${F}${V}`;
+
+  // ── Build page-1 HTML ────────────────────────────────────────────────────────
   const html = buildInvoiceHTML({
     order: enrichedOrder, customer, biz, invoiceNumber,
     isGST, showDue, historicalDue, advancePaid, qrDataUrl,
     paperSize,
   });
 
-  // ── Render using a hidden iframe so the full HTML document renders correctly ──
-  // A plain div cannot host <!DOCTYPE html> — styles get stripped and html2canvas
-  // captures a blank page. An iframe creates a real document context.
-  // Paper dimensions at 96dpi: A4=794×1123, A5=559×794
-  const paperW = paperSize === "a5" ? 559 : 794;
-  const paperH = paperSize === "a5" ? 794 : 1123;
-
-  const iframe = document.createElement("iframe");
-  iframe.style.cssText = [
-    "position:fixed",
-    "left:-9999px",
-    "top:-9999px",
-    `width:${paperW}px`,
-    `height:${paperH}px`,
-    "border:none",
-    "opacity:0",
-    "pointer-events:none",
-    "z-index:-9999",
-  ].join(";");
-  document.body.appendChild(iframe);
-
-  try {
-    // Write the full HTML document into the iframe
-    const iframeDoc = iframe.contentDocument!;
-    iframeDoc.open();
-    iframeDoc.write(html);
-    iframeDoc.close();
-
-    // Wait for iframe to fully load (fonts, images, layout)
-    await new Promise<void>((resolve) => {
-      if (iframe.contentDocument?.readyState === "complete") {
-        resolve();
-      } else {
-        iframe.onload = () => resolve();
-      }
-    });
-
-    // Extra rAF yield to let the browser paint the iframe contents
-    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
-
-    // Wait for fonts inside the iframe document to be ready
-    await (iframe.contentDocument as any).fonts?.ready;
-
-    // Wait for all images inside the iframe to decode
-    const images = Array.from(iframe.contentDocument!.querySelectorAll("img"));
-    await Promise.all(
-      images.map((img) =>
+  // ── Helper: render one HTML page to a canvas, returns dataURL ───────────────
+  async function renderPageToDataUrl(pageHtml: string): Promise<{ dataUrl: string; canvasW: number; canvasH: number }> {
+    const iframe = document.createElement("iframe");
+    iframe.style.cssText = [
+      "position:fixed", "left:-9999px", "top:-9999px",
+      `width:${paperW}px`, `height:${paperH}px`,
+      "border:none", "opacity:0", "pointer-events:none", "z-index:-9999",
+    ].join(";");
+    document.body.appendChild(iframe);
+    try {
+      const iframeDoc = iframe.contentDocument!;
+      iframeDoc.open(); iframeDoc.write(pageHtml); iframeDoc.close();
+      await new Promise<void>((resolve) => {
+        if (iframe.contentDocument?.readyState === "complete") resolve();
+        else iframe.onload = () => resolve();
+      });
+      await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+      await (iframe.contentDocument as any).fonts?.ready;
+      const images = Array.from(iframe.contentDocument!.querySelectorAll("img"));
+      await Promise.all(images.map((img) =>
         img.complete
           ? (img as any).decode?.().catch(() => {}) ?? Promise.resolve()
-          : new Promise<void>((resolve) => {
-              img.onload  = () => resolve();
-              img.onerror = () => resolve();
-            })
-      )
-    );
-
-    // Measure actual content height to size canvas correctly
-    const body = iframe.contentDocument!.body;
-    const actualHeight = Math.max(
-      body.scrollHeight,
-      body.offsetHeight,
-      iframe.contentDocument!.documentElement.scrollHeight,
-    );
-
-    // Resize iframe to full content height before capture
-    iframe.style.height = `${actualHeight}px`;
-    // Another yield after resize
-    await new Promise<void>((r) => requestAnimationFrame(() => r()));
-
-    // Capture the iframe body
-    const canvas = await html2canvas(body, {
-      scale: 2,
-      useCORS: true,
-      allowTaint: true,
-      backgroundColor: "#ffffff",
-      logging: false,
-      imageTimeout: 15000,
-      width:  paperW,
-      height: actualHeight,
-      windowWidth:  paperW,
-      windowHeight: actualHeight,
-    } as any);
-
-    if (canvas.width === 0 || canvas.height === 0) {
-      throw new Error("html2canvas returned an empty canvas — content did not render.");
+          : new Promise<void>((resolve) => { img.onload = () => resolve(); img.onerror = () => resolve(); })
+      ));
+      const body = iframe.contentDocument!.body;
+      const actualH = Math.max(body.scrollHeight, body.offsetHeight, iframe.contentDocument!.documentElement.scrollHeight);
+      iframe.style.height = `${actualH}px`;
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      const canvas = await html2canvas(body, {
+        scale: 2, useCORS: true, allowTaint: true, backgroundColor: "#ffffff",
+        logging: false, imageTimeout: 15000,
+        width: paperW, height: actualH, windowWidth: paperW, windowHeight: actualH,
+      } as any);
+      if (canvas.width === 0 || canvas.height === 0) throw new Error("Empty canvas");
+      return { dataUrl: canvas.toDataURL("image/jpeg", 0.95), canvasW: canvas.width, canvasH: canvas.height };
+    } finally {
+      if (iframe.parentNode) document.body.removeChild(iframe);
     }
+  }
 
-    // Build PDF with JPEG (reliable across all browsers, no corrupt-PNG issues)
+  // ── Measure: how many items fit on page 1 and on continuation pages ──────────
+  // We render page 1 with 0 items to measure the "fixed overhead" height (header,
+  // consignee, col-header, totals, signature, footer). Then measure one item row.
+  // From those two numbers we compute items-per-page for page 1 and for cont pages.
+
+  const totalItems = enrichedOrder.items.length;
+
+  // Render page 1 with NO items (just structure) to measure overhead
+  const probeOrder0 = { ...enrichedOrder, items: [] as any[] };
+  const probeHtml0 = buildInvoiceHTML({
+    order: probeOrder0 as any, customer, biz, invoiceNumber,
+    isGST, showDue, historicalDue, advancePaid, qrDataUrl,
+    paperSize,
+  });
+
+  // Render page 1 with ONE item to measure one item row height
+  const probeOrder1 = { ...enrichedOrder, items: enrichedOrder.items.slice(0, 1) };
+  const probeHtml1 = buildInvoiceHTML({
+    order: probeOrder1 as any, customer, biz, invoiceNumber,
+    isGST, showDue, historicalDue, advancePaid, qrDataUrl,
+    paperSize,
+  });
+
+  // Render both probes in parallel
+  const [probe0, probe1] = await Promise.all([
+    renderPageToDataUrl(probeHtml0),
+    renderPageToDataUrl(probeHtml1),
+  ]);
+
+  // Heights in canvas pixels (scale:2 so divide by 2 for CSS pixels)
+  const overheadH   = probe0.canvasH / 2;    // page 1 with 0 items
+  const oneItemH    = (probe1.canvasH - probe0.canvasH) / 2;  // delta = one row height
+  const page1BodyH  = paperH;                // available CSS px on page 1
+
+  // Continuation page overhead: just cont-header (≈24px) + col-headers (≈28px)
+  const contOverhead = Math.round(52 * scale);
+  const contBodyH    = paperH;
+
+  // Items that fit on page 1 (leave 8px breathing room)
+  const itemsOnPage1 = oneItemH > 0
+    ? Math.max(1, Math.floor((page1BodyH - overheadH - 8) / oneItemH))
+    : totalItems;
+
+  // Items per continuation page
+  const itemsPerContPage = oneItemH > 0
+    ? Math.max(1, Math.floor((contBodyH - contOverhead - 8) / oneItemH))
+    : totalItems;
+
+  // If everything fits on page 1 — classic single-page render
+  if (totalItems <= itemsOnPage1) {
+    const { dataUrl, canvasW, canvasH } = await renderPageToDataUrl(html);
     const pdf  = new jsPDF({ unit: "mm", format: paperSize === "a5" ? "a5" : "a4", orientation: "portrait" });
     const pdfW = pdf.internal.pageSize.getWidth();
     const pdfH = pdf.internal.pageSize.getHeight();
-
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
-    const ratio   = pdfW / canvas.width;
-    const imgH    = canvas.height * ratio;
-
+    const dataUrlFinal = dataUrl;
+    const ratio = pdfW / canvasW;
+    const imgH  = canvasH * ratio;
     let heightLeft = imgH;
     let position   = 0;
+    pdf.addImage(dataUrlFinal, "JPEG", 0, position, pdfW, imgH);
+    heightLeft -= pdfH;
+    while (heightLeft > 0.5) {
+      position -= pdfH; pdf.addPage();
+      pdf.addImage(dataUrlFinal, "JPEG", 0, position, pdfW, imgH);
+      heightLeft -= pdfH;
+    }
+    return { pdf, html };
+  }
 
+  // ── Multi-page: split items into batches ─────────────────────────────────────
+  const batches: typeof enrichedOrder.items[] = [];
+  batches.push(enrichedOrder.items.slice(0, itemsOnPage1));
+  let offset = itemsOnPage1;
+  while (offset < totalItems) {
+    batches.push(enrichedOrder.items.slice(offset, offset + itemsPerContPage));
+    offset += itemsPerContPage;
+  }
+  const totalPages = batches.length;
+
+  // ── Pre-build the summary/totals/signature/footer block for the last page ────
+  // We reuse the same summary row helpers from buildInvoiceHTML by duplicating the logic here
+  const lineAmounts    = enrichedOrder.items.map((item) => computeLineAmounts(item, isGST));
+  const totalTaxable   = round3(lineAmounts.reduce((s, a) => s + a.taxableValue, 0));
+  const totalCGST      = round3(lineAmounts.reduce((s, a) => s + a.lineCGST,    0));
+  const totalSGST      = round3(lineAmounts.reduce((s, a) => s + a.lineSGST,    0));
+  const totalComputed  = round2(lineAmounts.reduce((s, a) => s + a.lineTotal,   0));
+  const totalPayable2  = totalComputed + (showDue ? historicalDue : 0);
+  const balance2       = Math.max(0, round2(totalPayable2 - advancePaid));
+  const amountForWords2 = balance2 > 0 ? balance2 : totalPayable2;
+
+  const VALUE_COL_SPAN = 1;
+  const LABEL_COL_SPAN = colspan - VALUE_COL_SPAN;
+  const summaryRowHtml = (label: string, value: string, bold = false) => {
+    const s = bold ? "font-weight:700;" : "";
+    return `<tr>
+      <td colspan="${LABEL_COL_SPAN}" style="${c}text-align:right;${s}">${label}</td>
+      <td colspan="${VALUE_COL_SPAN}" style="${c}text-align:right;${s}">${value}</td>
+    </tr>`;
+  };
+  const dueRows2 = showDue && historicalDue > 0 ? `
+    ${summaryRowHtml("Previous Due", historicalDue.toFixed(2))}
+    ${summaryRowHtml("Total Payable", (totalComputed + historicalDue).toFixed(2), true)}
+  ` : "";
+  const advanceRow2 = advancePaid > 0 ? summaryRowHtml("Advance Paid", `- ${advancePaid.toFixed(2)}`) : "";
+  const balanceRow2 = advancePaid > 0 ? summaryRowHtml("Balance to Pay", balance2 > 0 ? balance2.toFixed(2) : "NIL", true) : "";
+
+  const bankDetails2 = isGST && (biz?.bankName || biz?.upiId) ? `
+    <tr>
+      <td colspan="${colspan}" style="${c}font-size:${fs(10)}">
+        <strong>Payment Details:</strong>&nbsp;
+        ${[
+          biz?.bankName      ? `Bank: ${biz.bankName}` : "",
+          biz?.accountNumber ? `A/C: ${biz.accountNumber}` : "",
+          biz?.ifscCode      ? `IFSC: ${biz.ifscCode}` : "",
+          biz?.upiId         ? `UPI: ${biz.upiId}` : "",
+        ].filter(Boolean).join("  |  ")}
+      </td>
+    </tr>` : "";
+
+  const sigLeft  = Math.floor(colspan / 2);
+  const sigRight = colspan - sigLeft;
+
+  const lastPageTotalsRow = isGST ? `
+  <tr>
+    <td style="${c}"></td>
+    <td colspan="2" style="${c};font-weight:700;">TOTALS</td>
+    <td style="${c}"></td><td style="${c}"></td><td style="${c}"></td>
+    <td style="${c};text-align:right;font-weight:700;">${totalTaxable.toFixed(3)}</td>
+    <td style="${c}"></td>
+    <td style="${c};text-align:right;font-weight:700;">${totalCGST.toFixed(3)}</td>
+    <td style="${c}"></td>
+    <td style="${c};text-align:right;font-weight:700;">${totalSGST.toFixed(3)}</td>
+    <td style="${c};text-align:right;font-weight:700;font-size:${fs(14)};">${totalComputed.toFixed(2)}</td>
+  </tr>` : `
+  <tr>
+    <td style="${c}"></td>
+    <td colspan="4" style="${c};font-weight:700;">TOTALS</td>
+    <td style="${c};text-align:right;font-weight:700;font-size:${fs(14)};">${totalComputed.toFixed(2)}</td>
+  </tr>`;
+
+  const summaryBlock = `
+  ${lastPageTotalsRow}
+  ${dueRows2}
+  ${advanceRow2}
+  ${balanceRow2}
+  ${bankDetails2}
+  <tr>
+    <td colspan="${colspan - 1}" style="${c};text-align:right;font-weight:700;">CASH COLLECTION</td>
+    <td style="${c}"></td>
+  </tr>
+  <tr>
+    <td colspan="${colspan}" style="${c};text-align:center;">
+      ${numberToWords(amountForWords2)} Only
+    </td>
+  </tr>
+  <tr class="signature">
+    <td colspan="${sigLeft}" style="${c}">Proprietor Signature</td>
+    <td colspan="${sigRight}" style="${c}">Receiver Signature</td>
+  </tr>
+  <tr>
+    <td colspan="${colspan}" style="${c};text-align:center;">
+      <div>${(biz as any)?.invoiceFooterLine1 || "This Is Computer Based Invoice"}</div>
+      <div style="margin-top:4px;">${biz?.invoiceFooter || "Thank you! Visit Again"}</div>
+    </td>
+  </tr>`;
+
+  // ── Build and render each page ───────────────────────────────────────────────
+  const pdf = new jsPDF({ unit: "mm", format: paperSize === "a5" ? "a5" : "a4", orientation: "portrait" });
+  const pdfW = pdf.internal.pageSize.getWidth();
+  const pdfH = pdf.internal.pageSize.getHeight();
+  let firstPage = true;
+
+  for (let pageIdx = 0; pageIdx < totalPages; pageIdx++) {
+    const isLastPage = pageIdx === totalPages - 1;
+    const pageItems  = batches[pageIdx];
+
+    let pageHtml: string;
+
+    if (pageIdx === 0) {
+      // Page 1: full invoice but with only the first batch of items
+      const p1Order = { ...enrichedOrder, items: pageItems };
+      pageHtml = buildInvoiceHTML({
+        order: p1Order as any, customer, biz, invoiceNumber,
+        isGST, showDue: isLastPage ? showDue : false,
+        historicalDue: isLastPage ? historicalDue : 0,
+        advancePaid:   isLastPage ? advancePaid : 0,
+        qrDataUrl:     isLastPage ? qrDataUrl : "",
+        paperSize,
+        // Override: suppress totals/summary on page 1 if not last page
+        suppressSummary: !isLastPage,
+      } as any);
+    } else {
+      // Build item rows for this continuation page
+      const itemRowsHtml = pageItems.map((item, localIdx) => {
+        const globalIdx = batches.slice(0, pageIdx).reduce((s, b) => s + b.length, 0) + localIdx;
+        const la = lineAmounts[globalIdx];
+        const { taxableValue, lineCGST, lineSGST, lineTotal, gstPct } = la;
+        const cgstRate = gstPct / 2;
+        const isLastItem = localIdx === pageItems.length - 1 && !isLastPage;
+
+        if (isGST) {
+          return `<tr class="item-row${isLastItem ? " item-last" : ""}">
+            <td>${globalIdx + 1}</td>
+            <td colspan="2" style="text-align:left;padding-left:10px;">
+              <div>${item.productName}</div>
+              <div style="font-size:${fs(9)};color:#555;margin-top:2px;">₹${item.price.toFixed(2)} / ${item.unit}</div>
+            </td>
+            <td>${item.hsn || ""}</td>
+            <td>${item.quantity}</td>
+            <td>${item.unit}</td>
+            <td class="right">${taxableValue.toFixed(3)}</td>
+            <td>${gstPct > 0 ? `${cgstRate}%` : "0.0%"}</td>
+            <td class="right">${gstPct > 0 ? lineCGST.toFixed(3) : "0.000"}</td>
+            <td>${gstPct > 0 ? `${cgstRate}%` : "0.0%"}</td>
+            <td class="right">${gstPct > 0 ? lineSGST.toFixed(3) : "0.000"}</td>
+            <td class="right bold">${lineTotal.toFixed(2)}</td>
+          </tr>`;
+        } else {
+          return `<tr class="item-row${isLastItem ? " item-last" : ""}">
+            <td>${globalIdx + 1}</td>
+            <td class="right">${item.price.toFixed(2)}</td>
+            <td style="text-align:left;padding-left:10px;">${item.productName}</td>
+            <td>${item.quantity}</td>
+            <td>${item.unit}</td>
+            <td class="right bold">${lineTotal.toFixed(2)}</td>
+          </tr>`;
+        }
+      }).join("");
+
+      pageHtml = buildContinuationHTML({
+        pageNum: pageIdx + 1,
+        totalPages,
+        invoiceNumber,
+        isGST,
+        itemRows: itemRowsHtml,
+        isLastPage,
+        summaryBlock: isLastPage ? summaryBlock : "",
+        colspan,
+        c,
+        scale,
+        fs,
+        bodyWidth,
+        wrapperWidth,
+      });
+    }
+
+    const { dataUrl, canvasW, canvasH } = await renderPageToDataUrl(pageHtml);
+    const ratio = pdfW / canvasW;
+    const imgH  = canvasH * ratio;
+
+    if (!firstPage) pdf.addPage();
+    firstPage = false;
+
+    // Add image — if it somehow overflows one PDF page, slice it
+    let heightLeft = imgH;
+    let position   = 0;
     pdf.addImage(dataUrl, "JPEG", 0, position, pdfW, imgH);
     heightLeft -= pdfH;
-
-    while (heightLeft > 0.5) {  // 0.5mm epsilon — prevents phantom extra page from float imprecision
-      position  -= pdfH;
-      pdf.addPage();
+    while (heightLeft > 0.5) {
+      position -= pdfH; pdf.addPage();
       pdf.addImage(dataUrl, "JPEG", 0, position, pdfW, imgH);
       heightLeft -= pdfH;
     }
-
-    return { pdf, html };
-  } finally {
-    if (iframe.parentNode) {
-      document.body.removeChild(iframe);
-    }
   }
+
+  return { pdf, html };
 }
 
 // ─── Public exports (same API as before — no callers need to change) ──────────

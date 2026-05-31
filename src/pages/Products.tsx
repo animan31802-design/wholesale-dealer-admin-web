@@ -7,6 +7,7 @@ import {
 import { db } from "../firebase/config";
 import { Product, PriceSlab, ProductUnit, GSTRate, Order } from "../types";
 import { useAuthStore } from "../store/authStore";
+import { useModalKeyboard } from "../hooks/useModalKeyboard";
 import Pagination from "../components/Pagination";
 import { useTamilSearch } from "../utils/UseTamilSearch";
 import { TamilSearchInput } from "../components/TamilSearchInput";
@@ -236,6 +237,9 @@ export default function Products() {
     setForm({ ...form, category: newCategory.trim() });
     setNewCategory(""); setShowNewCategory(false);
   };
+
+  // ── Keyboard shortcuts for inline modals ─────────────────────────────────
+  useModalKeyboard({ onClose: () => { setShowBulkModal(false); setDeleteConfirm(null); }, confirmOnEnter: false });
 
   const margin = (p: Product) => p.costPrice > 0 ? (((p.sellingPrice - p.costPrice) / p.costPrice) * 100).toFixed(0) : null;
 
@@ -708,6 +712,8 @@ function StockAdjustModal({ product, onClose, onAdjust }: {
     await onAdjust(product, q, reason.trim(), direction);
     setSaving(false);
   };
+
+  useModalKeyboard({ onClose, onConfirm: handleSave, disabled: saving || !qty || !reason.trim() || parseFloat(qty) <= 0 });
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">

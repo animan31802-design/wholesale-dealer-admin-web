@@ -12,6 +12,7 @@ import { Order } from "../types";
 import { getLedger, calcBalance, recordManualPayment, recordAdjustment } from "../utils/ledger";
 import MapPicker from "../components/MapPicker";
 import { useAuthStore } from "../store/authStore";
+import { useModalKeyboard } from "../hooks/useModalKeyboard";
 import { useTamilSearch } from "../utils/UseTamilSearch";
 import { TamilSearchInput } from "../components/TamilSearchInput";
 
@@ -43,6 +44,7 @@ export default function Customers() {
   const [form, setForm]               = useState<Customer>(emptyCustomer());
   const [editId, setEditId]           = useState<string | null>(null);
   const [showForm, setShowForm]       = useState(false);
+  useModalKeyboard({ onClose: () => { setShowForm(false); setLedgerCustomer(null); }, confirmOnEnter: false });
   const [showMap, setShowMap]         = useState(false);
   const [loading, setLoading]         = useState(true);
   const [showNewRegion, setShowNewRegion] = useState(false);
