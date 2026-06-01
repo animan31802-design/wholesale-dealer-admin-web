@@ -9,6 +9,7 @@ import { db } from "../firebase/config";
 import { Order, AppUser } from "../types";
 import { useAuthStore } from "../store/authStore";
 import { useModalKeyboard } from "../hooks/useModalKeyboard";
+const fmtQ = (n: number) => parseFloat(n.toFixed(4)).toString();
 import { buildInvoicePDF } from "../utils/invoice";
 import Pagination from "../components/Pagination";
 import { Customer, InvoiceType, BillingMode } from "../types";
@@ -1463,7 +1464,7 @@ export function OrderDetailPanel({
                   <div>
                     <p className="text-sm font-medium text-gray-800">{item.productName}</p>
                     <p className="text-xs text-gray-400 mt-0.5">
-                      {item.quantity} {item.unit} × ₹{item.price.toFixed(2)}
+                      {fmtQ(item.quantity)} {item.unit} × ₹{item.price.toFixed(2)}
                     </p>
                   </div>
                   <p className="text-sm font-semibold text-gray-800">₹{item.total.toFixed(2)}</p>
@@ -2352,7 +2353,7 @@ function PartialReturnModal({ order, onClose, onDone }: {
                 <div className="flex-1">
                   <p className="text-sm font-medium text-gray-800">{item.productName}</p>
                   <p className="text-xs text-gray-400">
-                    Delivered: {item.quantity} {item.unit}
+                    Delivered: {fmtQ(item.quantity)} {item.unit}
                     {(item as any).returnedQty > 0 && (
                       <span className="text-orange-500 ml-1">(already returned: {(item as any).returnedQty})</span>
                     )}

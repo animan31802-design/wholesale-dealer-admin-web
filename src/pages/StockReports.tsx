@@ -26,6 +26,9 @@ interface StockMovement {
 
 type ReportTab = "status" | "lowstock" | "movement" | "valuation" | "moving";
 
+// Strip floating point noise: show up to 4 decimal places, strip trailing zeros
+const fmtNum = (n: number) => parseFloat(n.toFixed(4)).toString();
+
 // ── Helpers ───────────────────────────────────────────────────────
 function exportXlsx(rows: any[][], filename: string, headers: string[]) {
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
@@ -106,21 +109,26 @@ export default function StockReports() {
     });
   }, []);
 
-  // Load all stock movements (lazy, on demand)
+  // Load all stock movements — query each product's subcollection individually
+  // (collectionGroup requires a Firestore index; per-product queries work without one)
   const loadMovements = async () => {
     setMovLoading(true);
-    const snap = await getDocs(collectionGroup(db, "stockMovements"));
     const all: StockMovement[] = [];
-    snap.forEach(d => {
-      const data = d.data();
-      // parent path: products/{productId}/stockMovements/{id}
-      const productId = d.ref.parent.parent?.id || "";
-      all.push({ id: d.id, productId, productName: "", ...data } as StockMovement);
-    });
-    // Map productId → name
-    const prodMap: Record<string, string> = {};
-    products.forEach(p => { prodMap[p.id!] = p.name; });
-    all.forEach(m => { m.productName = prodMap[m.productId] || m.productId; });
+    const tracked = products.filter(p => p.trackInventory && p.id);
+    await Promise.all(
+      tracked.map(async (p) => {
+        try {
+          const snap = await getDocs(
+            query(collection(db, "products", p.id!, "stockMovements"), orderBy("createdAt", "desc"))
+          );
+          snap.forEach(d => {
+            all.push({ id: d.id, productId: p.id!, productName: p.name, ...d.data() } as StockMovement);
+          });
+        } catch {
+          // skip products with no movements
+        }
+      })
+    );
     all.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     setMovements(all);
     setMovLoading(false);
@@ -215,9 +223,9 @@ function CurrentStockReport({ products }: { products: Product[] }) {
   const HEADERS = ["Product", "Category", "Unit", "Stock", "Reserved", "Available", "Min Alert", "Status"];
   const getRows = () => filtered.map(p => [
     p.name, p.category || "—", p.unit,
-    p.stock, p.reservedStock || 0,
-    Math.max(0, p.stock - (p.reservedStock || 0)),
-    p.minStockAlert,
+    parseFloat(p.stock.toFixed(4)), parseFloat((p.reservedStock || 0).toFixed(4)),
+    parseFloat(Math.max(0, p.stock - (p.reservedStock || 0)).toFixed(4)),
+    parseFloat(p.minStockAlert.toFixed(4)),
     p.stock <= 0 ? "Out of Stock" : p.stock <= p.minStockAlert ? "Low Stock" : "OK",
   ]);
   const handleExport = () => exportXlsx(getRows(), "current_stock_status", HEADERS);
@@ -290,10 +298,10 @@ function CurrentStockReport({ products }: { products: Product[] }) {
                     <span className="bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded-full">{p.category || "—"}</span>
                   </td>
                   <td className="px-5 py-3 text-center text-gray-500 text-xs">{p.unit}</td>
-                  <td className="px-5 py-3 text-right font-semibold text-gray-800">{p.stock}</td>
-                  <td className="px-5 py-3 text-right text-gray-400">{reserved || "—"}</td>
-                  <td className="px-5 py-3 text-right font-medium text-gray-700">{available}</td>
-                  <td className="px-5 py-3 text-right text-gray-400">{p.minStockAlert}</td>
+                  <td className="px-5 py-3 text-right font-semibold text-gray-800">{fmtNum(p.stock)}</td>
+                  <td className="px-5 py-3 text-right text-gray-400">{reserved ? fmtNum(reserved) : "—"}</td>
+                  <td className="px-5 py-3 text-right font-medium text-gray-700">{fmtNum(available)}</td>
+                  <td className="px-5 py-3 text-right text-gray-400">{fmtNum(p.minStockAlert)}</td>
                   <td className="px-5 py-3 text-center">
                     {isOut
                       ? <span className="bg-red-100 text-red-600 text-xs px-2 py-0.5 rounded-full font-medium">Out of Stock</span>
@@ -327,7 +335,7 @@ function LowStockReport({ products }: { products: Product[] }) {
 
   const LS_HEADERS = ["Product", "Category", "Unit", "Current Stock", "Min Alert", "Status"];
   const getLsRows = () => reorderList.map(p => [
-    p.name, p.category || "—", p.unit, p.stock, p.minStockAlert,
+    p.name, p.category || "—", p.unit, parseFloat(p.stock.toFixed(4)), parseFloat(p.minStockAlert.toFixed(4)),
     p.stock <= 0 ? "Out of Stock" : "Low Stock",
   ]);
   const handleExport = () => exportXlsx(getLsRows(), "low_stock_reorder_list", LS_HEADERS);
@@ -390,11 +398,11 @@ function LowStockReport({ products }: { products: Product[] }) {
                     <td className="px-5 py-3 font-medium text-gray-800">{p.name}</td>
                     <td className="px-5 py-3 text-gray-500 text-xs">{p.category || "—"}</td>
                     <td className={`px-5 py-3 text-right font-bold ${isOut ? "text-red-600" : "text-yellow-600"}`}>
-                      {p.stock} {p.unit}
+                      {fmtNum(p.stock)} {p.unit}
                     </td>
-                    <td className="px-5 py-3 text-right text-gray-400">{p.minStockAlert} {p.unit}</td>
+                    <td className="px-5 py-3 text-right text-gray-400">{fmtNum(p.minStockAlert)} {p.unit}</td>
                     <td className="px-5 py-3 text-right text-orange-600 font-medium">
-                      {shortfall > 0 ? `+${shortfall} needed` : "—"}
+                      {shortfall > 0 ? `+${fmtNum(shortfall)} needed` : "—"}
                     </td>
                     <td className="px-5 py-3 text-center">
                       {isOut
@@ -538,10 +546,10 @@ function MovementReport({
                   </span>
                 </td>
                 <td className={`px-5 py-3 text-right font-semibold ${m.direction === "in" ? "text-green-600" : "text-red-600"}`}>
-                  {m.direction === "in" ? "+" : "-"}{m.qty}
+                  {m.direction === "in" ? "+" : "-"}{fmtNum(m.qty)}
                 </td>
-                <td className="px-5 py-3 text-right text-gray-400">{m.stockBefore}</td>
-                <td className="px-5 py-3 text-right font-medium text-gray-700">{m.stockAfter}</td>
+                <td className="px-5 py-3 text-right text-gray-400">{fmtNum(m.stockBefore)}</td>
+                <td className="px-5 py-3 text-right font-medium text-gray-700">{fmtNum(m.stockAfter)}</td>
                 <td className="px-5 py-3 text-gray-500 text-xs">{m.reason || "—"}</td>
                 <td className="px-5 py-3 text-gray-400 text-xs">{m.createdByName || "—"}</td>
               </tr>
