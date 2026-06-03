@@ -67,6 +67,7 @@ export default function Settings() {
   const [testQr, setTestQr]         = useState<string>("");   // ₹1 test QR
   const [standAloneQr, setStandAloneQr] = useState<string>(""); // no-amount QR
 
+
   const generateQRs = useCallback(async (upiId: string) => {
     if (!upiId.trim()) { setTestQr(""); setStandAloneQr(""); return; }
     try {
@@ -126,6 +127,9 @@ export default function Settings() {
       <span className="animate-spin text-xl">⏳</span> Loading settings...
     </div>
   );
+
+
+
 
   return (
     <div className="p-3 md:p-6 max-w-3xl mx-auto">
@@ -563,6 +567,8 @@ export default function Settings() {
           {saving ? "Saving..." : saved ? "✅ Saved!" : "💾 Save Settings"}
         </button>
       </div>
+
+
     </div>
   );
 }

@@ -1065,8 +1065,12 @@ function PendingReport({ orders }: { orders: Order[] }) {
 // ══════════════════════════════════════════════════════════════════
 function ProfitReport({ orders }: { orders: Order[] }) {
   const { from: df, to: dt } = thisMonthRange();
-  const [from, setFrom] = useState(df);
-  const [to,   setTo]   = useState(dt);
+  const [from, setFrom]       = useState(df);
+  const [to,   setTo]         = useState(dt);
+
+
+  // No product lookup needed — costPrice is snapshotted on each order item at creation time.
+  // For old orders without costPrice on items, cost will show as 0 (honest, not misleading).
 
   const filtered = useMemo(() => {
     const f = new Date(from); f.setHours(0,0,0,0);
@@ -1078,71 +1082,76 @@ function ProfitReport({ orders }: { orders: Order[] }) {
     );
   }, [orders, from, to]);
 
-  // Per-order profit estimate
+  // Per-order profit calculation
   const rows = useMemo(() => filtered.map(o => {
     let costTotal = 0;
     let taxTotal  = 0;
     o.items.forEach(item => {
       const rate = parseGstRate(item.gst);
-      const gross = item.price * item.quantity;
-      const { taxable, tax } = itemTaxBreakdown(item.price, item.quantity, rate, item.taxInclusive ?? false);
-      // We don't have costPrice on OrderItem directly, so we estimate taxable as revenue for now
+      const { tax } = itemTaxBreakdown(item.price, item.quantity, rate, item.taxInclusive ?? false);
       taxTotal  += tax;
-      costTotal += 0; // Can only estimate if costPrice stored on order item
+      // Use cost price snapshotted at order creation time.
+      // Old orders without costPrice on items will show 0 cost (no fallback — keeps history clean).
+      const unitCost = (item as any).costPrice ?? 0;
+      costTotal += unitCost * item.quantity;
     });
     const revenue      = o.totalAmount;
     const taxComponent = taxTotal;
     const netRevenue   = revenue - taxComponent;
-    return { order: o, revenue, taxComponent, netRevenue, costTotal };
+    const grossProfit  = revenue - costTotal;  // GST is pass-through; compare full revenue vs cost
+    const marginPct    = netRevenue > 0 ? (grossProfit / netRevenue) * 100 : 0;
+    return { order: o, revenue, taxComponent, netRevenue, costTotal, grossProfit, marginPct };
   }), [filtered]);
 
   const totalRevenue    = rows.reduce((s, r) => s + r.revenue, 0);
   const totalTax        = rows.reduce((s, r) => s + r.taxComponent, 0);
   const totalNetRevenue = rows.reduce((s, r) => s + r.netRevenue, 0);
+  const totalCost       = rows.reduce((s, r) => s + r.costTotal, 0);
+  const totalProfit     = rows.reduce((s, r) => s + r.grossProfit, 0);
   const collected       = rows.reduce((s, r) => s + (r.order.amountCollected ?? 0), 0);
+  const overallMargin   = totalNetRevenue > 0 ? (totalProfit / totalNetRevenue) * 100 : 0;
 
   // Monthly trend
-  const trendMap: Record<string, { revenue: number; net: number }> = {};
-  filtered.forEach(o => {
-    const month = o.createdAt.slice(0, 7);
-    if (!trendMap[month]) trendMap[month] = { revenue: 0, net: 0 };
-    trendMap[month].revenue += o.totalAmount;
+  const trendMap: Record<string, { revenue: number; profit: number }> = {};
+  rows.forEach(r => {
+    const month = r.order.createdAt.slice(0, 7);
+    if (!trendMap[month]) trendMap[month] = { revenue: 0, profit: 0 };
+    trendMap[month].revenue += r.revenue;
+    trendMap[month].profit  += r.grossProfit;
   });
   const trendData = Object.entries(trendMap).sort().map(([m, v]) => ({
     month: new Date(m + "-01").toLocaleDateString("en-IN", { month: "short", year: "2-digit" }),
     revenue: +v.revenue.toFixed(0),
+    profit:  +v.profit.toFixed(0),
   }));
 
-  const HEADERS = ["Date", "Invoice", "Customer", "Gross Revenue", "GST Component", "Net Revenue (ex-tax)", "Collected"];
+  const HEADERS = ["Date", "Invoice", "Customer", "Gross Revenue", "GST", "Net Revenue", "Cost of Goods", "Gross Profit", "Margin %", "Collected"];
   const getRows = () => rows.map(r => [
     fmtDate(r.order.createdAt), r.order.invoiceNumber || r.order.id!,
     r.order.customerName,
     r.revenue.toFixed(2), r.taxComponent.toFixed(2), r.netRevenue.toFixed(2),
+    r.costTotal.toFixed(2), r.grossProfit.toFixed(2),
+    r.marginPct.toFixed(1) + "%",
     (r.order.amountCollected ?? 0).toFixed(2),
   ]);
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <SCard label="Gross Revenue"       value={fmtINR0(totalRevenue)}    color="blue"   sub={`${filtered.length} orders`} />
-        <SCard label="GST Component"       value={fmtINR0(totalTax)}        color="orange" sub="Tax collected on behalf of govt" />
-        <SCard label="Net Revenue (ex-tax)" value={fmtINR0(totalNetRevenue)} color="green" sub="Your actual revenue" />
-        <SCard label="Amount Collected"    value={fmtINR0(collected)}       color="purple" />
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <SCard label="Gross Revenue"    value={fmtINR0(totalRevenue)}    color="blue"   sub={`${filtered.length} orders`} />
+        <SCard label="GST Component"    value={fmtINR0(totalTax)}        color="orange" sub="Collected on behalf of govt" />
+        <SCard label="Net Revenue"      value={fmtINR0(totalNetRevenue)} color="green"  sub="Revenue after GST" />
+        <SCard label="Cost of Goods"    value={fmtINR0(totalCost)}       color="red"    sub="Based on product cost price" />
+        <SCard label="Gross Profit"     value={fmtINR0(totalProfit)}     color={totalProfit >= 0 ? "green" : "red"} sub={`${overallMargin.toFixed(1)}% margin`} />
+        <SCard label="Amount Collected" value={fmtINR0(collected)}       color="purple" />
       </div>
 
-      <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 text-sm text-yellow-800">
-        <p className="font-semibold mb-1">📌 Note on Profit Estimate</p>
-        <p className="text-xs text-yellow-700 leading-relaxed">
-          This shows <strong>Revenue – GST</strong> as Net Revenue. True profit requires deducting cost of goods.
-          Add <code className="bg-yellow-100 px-1 rounded">costPrice</code> to your order items to enable full gross profit calculation.
-          Currently cost data is not stored on orders.
-        </p>
-      </div>
+
 
       <div className="flex flex-wrap gap-3 items-center">
         <DateRange from={from} to={to} setFrom={setFrom} setTo={setTo} />
         <ActionBar
-          onPrint={() => printReport("Profit Estimate Report", HEADERS, getRows(), `Net Revenue (ex-tax): ${fmtINR(totalNetRevenue)}`)}
+          onPrint={() => printReport("Profit Estimate Report", HEADERS, getRows(), `Gross Profit: ${fmtINR(totalProfit)} | Margin: ${overallMargin.toFixed(1)}%`)}
           onExport={() => exportXlsx(getRows(), "profit_estimate", HEADERS)} />
       </div>
 
@@ -1157,7 +1166,8 @@ function ProfitReport({ orders }: { orders: Order[] }) {
                 tickFormatter={v => `₹${(v/1000).toFixed(0)}k`} />
               <Tooltip formatter={(v: any) => [fmtINR0(v), "Revenue"]}
                 contentStyle={{ borderRadius: 8, border: "1px solid #e5e7eb", fontSize: 12 }} />
-              <Bar dataKey="revenue" fill="#10b981" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="revenue" fill="#10b981" name="Revenue" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="profit"  fill="#6366f1" name="Profit"  radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -1171,8 +1181,11 @@ function ProfitReport({ orders }: { orders: Order[] }) {
               <th className="px-4 py-3 text-left">Invoice</th>
               <th className="px-4 py-3 text-left">Customer</th>
               <th className="px-4 py-3 text-right">Gross Revenue</th>
-              <th className="px-4 py-3 text-right">GST Component</th>
+              <th className="px-4 py-3 text-right">GST</th>
               <th className="px-4 py-3 text-right">Net Revenue</th>
+              <th className="px-4 py-3 text-right">Cost of Goods</th>
+              <th className="px-4 py-3 text-right">Gross Profit</th>
+              <th className="px-4 py-3 text-right">Margin</th>
               <th className="px-4 py-3 text-right">Collected</th>
             </tr>
           </thead>
@@ -1184,7 +1197,10 @@ function ProfitReport({ orders }: { orders: Order[] }) {
                 <td className="px-4 py-3 text-gray-800">{r.order.customerName}</td>
                 <td className="px-4 py-3 text-right text-gray-700">{fmtINR(r.revenue)}</td>
                 <td className="px-4 py-3 text-right text-orange-500">{fmtINR(r.taxComponent)}</td>
-                <td className="px-4 py-3 text-right font-semibold text-green-700">{fmtINR(r.netRevenue)}</td>
+                <td className="px-4 py-3 text-right text-green-700">{fmtINR(r.netRevenue)}</td>
+                <td className="px-4 py-3 text-right text-gray-500">{fmtINR(r.costTotal)}</td>
+                <td className={`px-4 py-3 text-right font-semibold ${r.grossProfit >= 0 ? "text-green-700" : "text-red-600"}`}>{fmtINR(r.grossProfit)}</td>
+                <td className={`px-4 py-3 text-right text-xs ${r.marginPct >= 0 ? "text-green-500" : "text-red-500"}`}>{r.marginPct.toFixed(1)}%</td>
                 <td className="px-4 py-3 text-right text-gray-600">{fmtINR(r.order.amountCollected ?? 0)}</td>
               </tr>
             ))}
@@ -1195,6 +1211,9 @@ function ProfitReport({ orders }: { orders: Order[] }) {
               <td className="px-4 py-3 text-right">{fmtINR(totalRevenue)}</td>
               <td className="px-4 py-3 text-right text-orange-600">{fmtINR(totalTax)}</td>
               <td className="px-4 py-3 text-right text-green-700">{fmtINR(totalNetRevenue)}</td>
+              <td className="px-4 py-3 text-right text-gray-500">{fmtINR(totalCost)}</td>
+              <td className={`px-4 py-3 text-right ${totalProfit >= 0 ? "text-green-700" : "text-red-600"}`}>{fmtINR(totalProfit)}</td>
+              <td className={`px-4 py-3 text-right text-xs ${overallMargin >= 0 ? "text-green-600" : "text-red-500"}`}>{overallMargin.toFixed(1)}%</td>
               <td className="px-4 py-3 text-right">{fmtINR(collected)}</td>
             </tr>
           </tfoot>

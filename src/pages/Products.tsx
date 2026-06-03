@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import {
   collection, getDocs, addDoc, updateDoc,
   deleteDoc, doc, orderBy, query,
-  onSnapshot, where
+  onSnapshot, where, setDoc
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Product, PriceSlab, ProductUnit, GSTRate, Order } from "../types";

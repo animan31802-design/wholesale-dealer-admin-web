@@ -126,7 +126,7 @@ function QtyDialog({
   product: Product; currentQty: number;
   onConfirm: (qty: number) => void; onDismiss: () => void;
 }) {
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(currentQty > 0 ? fmtQty(currentQty) : "");
   const qty       = parseFloat(input) || 0;
   const avail     = availableQty(product);
   const slabPrice = getSlabPrice(product, qty);
@@ -672,6 +672,16 @@ export default function CreateOrderPage() {
       let newOrderId = "";
       let newOrderNo = "";
 
+      // Snapshot costPrice at order creation time using the currently loaded products.
+      // costPrice is on the main product doc (readable by all roles).
+      // Stored invisibly on each order item — never shown in cart UI.
+      const prodIndex: Record<string, Product> = {};
+      products.forEach((pr) => { if (pr.id) prodIndex[pr.id] = pr; });
+      const costPriceMap: Record<string, number> = {};
+      billItems.forEach((item) => {
+        costPriceMap[item.productId] = prodIndex[item.productId]?.costPrice ?? 0;
+      });
+
       await runTransaction(db, async (t) => {
         // ── READ PHASE: ALL reads must come before any writes ─────
         const productRefs  = billItems.map((item) => doc(db, "products", item.productId));
@@ -725,6 +735,9 @@ export default function CreateOrderPage() {
             unit:        item.unit,
             quantity:    item.quantity,
             total:       item.total,
+            // Snapshot costPrice at order creation time for accurate profit reports.
+            // Invisible to field agents / packing staff in UI — admin-only in reports.
+            costPrice:   costPriceMap[item.productId] ?? 0,
           };
           if (item.gst)          clean.gst          = item.gst;
           if (item.hsn)          clean.hsn          = item.hsn;

@@ -78,7 +78,7 @@ export default function Orders() {
   );
   const { query: search, setQuery: setSearch, results: searchResults } =
     useTamilSearch(ordersForSearch as unknown as Record<string, unknown>[], [
-      "customerName", "agentName", "deliveryPersonName", "id", "_productNames",
+      "customerName", "agentName", "deliveryPersonName", "id", "orderNo", "invoiceNumber", "_productNames",
     ]);
 
   const prevPendingCount = useRef<number | null>(null);
@@ -363,7 +363,7 @@ export default function Orders() {
           <TamilSearchInput
             value={search}
             onChange={setSearch}
-            placeholder="Search customer, agent, product, order ID... (supports Tamil)"
+            placeholder="Search customer, agent, product, order no, invoice no... (supports Tamil)"
           />
         </div>
 
@@ -560,6 +560,12 @@ export default function Orders() {
                       <button onClick={(e) => { e.stopPropagation(); setReassignOrder(order); }}
                         className="bg-indigo-500 text-white text-xs px-3 py-1.5 rounded-lg hover:bg-indigo-600">
                         🔄 Reassign Agent
+                      </button>
+                    )}
+                    {order.status === "returned_to_warehouse" && user?.role === "admin" && (
+                      <button onClick={(e) => { e.stopPropagation(); setCancelOrder(order); }}
+                        className="bg-red-100 text-red-600 text-xs px-3 py-1.5 rounded-lg hover:bg-red-200 font-medium">
+                        🚫 Cancel
                       </button>
                     )}
                     {(order.status === "pending" || order.status === "packed") && user?.role === "admin" && (
@@ -1698,7 +1704,7 @@ export function OrderDetailPanel({
                 🚚 Assign Delivery Agent
               </button>
             )}
-            {(order.status === "pending" || order.status === "packed") && isAdmin && (
+            {(order.status === "pending" || order.status === "packed" || order.status === "returned_to_warehouse") && isAdmin && (
               <button
                 onClick={() => onCancel(order)}
                 className="flex-1 bg-red-100 text-red-600 py-2.5 rounded-xl text-sm font-medium hover:bg-red-200"
@@ -1913,7 +1919,9 @@ function CancelOrderModal({
         // FIX: Stock restore logic gated on order status.
         // • pending  → only reservedStock was held (stock never deducted by packing) → clear reservation only
         // • packed   → packing already deducted stock → restore stock AND clear reservation
-        const isPacked = order.status === "packed";
+        // packed = packing deducted stock; returned_to_warehouse = items came back but stock
+        // was not auto-restocked (only order status changed) → restore stock in both cases
+        const isPacked = order.status === "packed" || order.status === "returned_to_warehouse";
         productSnaps.forEach((snap, i) => {
           if (!snap.exists()) return;
           const item = order.items[i];
