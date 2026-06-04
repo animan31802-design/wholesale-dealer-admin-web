@@ -5,6 +5,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { StaffMember } from "./Staff";
+import { getBusinessSettings } from "./Settings";
 
 // ── Types ────────────────────────────────────────────────────────
 export type AttendanceStatus = "present" | "absent" | "half_day" | "leave";
@@ -18,6 +19,27 @@ export interface AttendanceRecord {
   status: AttendanceStatus;
   note?: string;
   markedAt: string;
+}
+
+export interface WorkCalendar {
+  weeklyOff: number[];          // 0=Sun, 1=Mon … 6=Sat
+  holidays: { date: string; label: string }[];
+}
+
+export const DEFAULT_CALENDAR: WorkCalendar = {
+  weeklyOff: [0],               // Sunday off by default
+  holidays: [],
+};
+
+export function isHoliday(date: string, cal: WorkCalendar): { off: boolean; label: string } {
+  const dow = new Date(date).getDay();
+  if (cal.weeklyOff.includes(dow)) {
+    const dayNames = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+    return { off: true, label: `${dayNames[dow]} — Weekly Off` };
+  }
+  const h = cal.holidays.find(h => h.date === date);
+  if (h) return { off: true, label: h.label || "Holiday" };
+  return { off: false, label: "" };
 }
 
 const STATUS_CONFIG: Record<AttendanceStatus, { label: string; color: string; bg: string }> = {
@@ -39,8 +61,16 @@ export default function StaffAttendance() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [filterDept, setFilterDept] = useState("All");
+  const [calendar, setCalendar] = useState<WorkCalendar>(DEFAULT_CALENDAR);
 
   const departments = ["All", ...Array.from(new Set(staff.map(s => s.department))).sort()];
+
+  // Load work calendar from settings
+  useEffect(() => {
+    getDoc(doc(db, "settings", "workCalendar"))
+      .then(snap => { if (snap.exists()) setCalendar(snap.data() as WorkCalendar); })
+      .catch(() => {});
+  }, []);
 
   // Load active staff
   useEffect(() => {
@@ -66,11 +96,12 @@ export default function StaffAttendance() {
         });
         setAttendance(map);
         setNotes(noteMap);
-        // If records already exist for this date, treat as already saved
         setSaved(snap.docs.length > 0);
         setLoading(false);
       });
   }, [date]);
+
+  const holidayInfo = isHoliday(date, calendar);
 
   const setStatus = (staffId: string, status: AttendanceStatus) => {
     setAttendance(prev => ({ ...prev, [staffId]: status }));
@@ -89,16 +120,11 @@ export default function StaffAttendance() {
     const batch: Promise<void>[] = [];
     staff.forEach(s => {
       const status = attendance[s.id!];
-      if (!status) return; // skip unmarked
+      if (!status) return;
       const id = `${s.id}_${date}`;
       const record: AttendanceRecord = {
-        staffId: s.id!,
-        staffName: s.name,
-        department: s.department,
-        date,
-        status,
-        note: notes[s.id!] ?? "",
-        markedAt: new Date().toISOString(),
+        staffId: s.id!, staffName: s.name, department: s.department,
+        date, status, note: notes[s.id!] ?? "", markedAt: new Date().toISOString(),
       };
       batch.push(setDoc(doc(db, "attendance", id), record));
     });
@@ -108,13 +134,12 @@ export default function StaffAttendance() {
   };
 
   const visibleStaff = filterDept === "All" ? staff : staff.filter(s => s.department === filterDept);
-  const markedCount = visibleStaff.filter(s => attendance[s.id!]).length;
+  const markedCount  = visibleStaff.filter(s => attendance[s.id!]).length;
   const presentCount = visibleStaff.filter(s => attendance[s.id!] === "present").length;
-  const absentCount = visibleStaff.filter(s => attendance[s.id!] === "absent").length;
+  const absentCount  = visibleStaff.filter(s => attendance[s.id!] === "absent").length;
 
   return (
     <div className="p-4 md:p-6 max-w-5xl mx-auto">
-      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">Attendance</h1>
@@ -125,6 +150,17 @@ export default function StaffAttendance() {
           {saving ? "Saving…" : saved ? "✓ Saved" : "💾 Save Attendance"}
         </button>
       </div>
+
+      {/* Holiday banner */}
+      {holidayInfo.off && (
+        <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl px-5 py-3 flex items-center gap-3">
+          <span className="text-2xl">🏖️</span>
+          <div>
+            <p className="font-semibold text-amber-800 text-sm">{holidayInfo.label}</p>
+            <p className="text-xs text-amber-600 mt-0.5">This is a non-working day. You can still mark attendance if staff came in.</p>
+          </div>
+        </div>
+      )}
 
       {/* Controls */}
       <div className="bg-white rounded-xl shadow-sm p-4 mb-4 flex flex-wrap items-center gap-3">
@@ -151,7 +187,6 @@ export default function StaffAttendance() {
         </div>
       </div>
 
-      {/* Summary bar */}
       {markedCount > 0 && (
         <div className="grid grid-cols-3 gap-3 mb-4">
           {[
@@ -167,7 +202,6 @@ export default function StaffAttendance() {
         </div>
       )}
 
-      {/* Staff list */}
       <div className="bg-white rounded-xl shadow-sm overflow-hidden">
         {loading ? (
           <div className="p-8 text-center text-gray-400 text-sm">Loading…</div>
@@ -180,13 +214,10 @@ export default function StaffAttendance() {
               const cfg = status ? STATUS_CONFIG[status] : null;
               return (
                 <div key={s.id} className="px-4 py-3 flex flex-wrap items-center gap-3">
-                  {/* Staff info */}
                   <div className="flex-1 min-w-[140px]">
                     <p className="font-medium text-gray-800 text-sm">{s.name}</p>
                     <p className="text-xs text-gray-400">{s.role} · <span className="text-blue-500">{s.department}</span></p>
                   </div>
-
-                  {/* Status buttons */}
                   <div className="flex gap-1.5 flex-wrap">
                     {(["present", "absent", "half_day", "leave"] as AttendanceStatus[]).map(st => {
                       const c = STATUS_CONFIG[st];
@@ -201,17 +232,11 @@ export default function StaffAttendance() {
                       );
                     })}
                   </div>
-
-                  {/* Note input — shows only when something is marked */}
                   {status && (
-                    <input
-                      value={notes[s.id!] ?? ""}
-                      onChange={e => setNotes(prev => ({ ...prev, [s.id!]: e.target.value }))}
+                    <input value={notes[s.id!] ?? ""} onChange={e => setNotes(prev => ({ ...prev, [s.id!]: e.target.value }))}
                       placeholder="Note (optional)"
                       className="border border-gray-200 rounded-lg px-2 py-1 text-xs w-36 focus:outline-none focus:ring-1 focus:ring-orange-300" />
                   )}
-
-                  {/* Status badge */}
                   {cfg && (
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cfg.bg} ${cfg.color} ml-auto`}>
                       {cfg.label}
@@ -224,7 +249,6 @@ export default function StaffAttendance() {
         )}
       </div>
 
-      {/* Floating save hint */}
       {markedCount > 0 && !saved && (
         <div className="fixed bottom-6 right-6 bg-orange-500 text-white text-sm px-4 py-3 rounded-xl shadow-lg">
           {markedCount} staff marked · <button onClick={handleSave} disabled={saving} className="underline font-medium">{saving ? "Saving…" : "Save now"}</button>
