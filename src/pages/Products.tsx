@@ -25,7 +25,7 @@ const GST_RATES: { label: string; value: GSTRate }[] = [
 const FRACTIONAL_UNITS: ProductUnit[] = ["KG", "Gram", "Liter", "ML"];
 
 type StockFilter = "ALL" | "LOW_STOCK" | "OUT_OF_STOCK";
-type SortMode = "AZ" | "ZA" | "sellingPrice" | "costPrice" | "stock";
+type SortMode = "category" | "AZ" | "ZA" | "sellingPrice" | "costPrice" | "stock";
 
 const emptyProduct = (): Product => ({
   name: "", category: "", unit: "Piece",
@@ -54,7 +54,7 @@ export default function Products() {
   const [newCategory, setNewCategory] = useState("");
   const [showNewCategory, setShowNewCategory] = useState(false);
   const [stockFilter, setStockFilter] = useState<StockFilter>("ALL");
-  const [sortBy, setSortBy] = useState<SortMode>("AZ");
+  const [sortBy, setSortBy] = useState<SortMode>("category");
   const [catFilter, setCatFilter] = useState("All");
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [bulkPct, setBulkPct] = useState("");
@@ -92,6 +92,7 @@ export default function Products() {
     }
     const sorted = [...list];
     switch (sortBy) {
+      case "category":     sorted.sort((a, b) => (a.category || "").localeCompare(b.category || "") || a.name.localeCompare(b.name)); break;
       case "AZ":           sorted.sort((a, b) => a.name.localeCompare(b.name)); break;
       case "ZA":           sorted.sort((a, b) => b.name.localeCompare(a.name)); break;
       case "sellingPrice": sorted.sort((a, b) => b.sellingPrice - a.sellingPrice); break;
@@ -284,6 +285,7 @@ export default function Products() {
         />
         <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortMode)}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300">
+          <option value="category">Sort: Category</option>
           <option value="AZ">Sort: A → Z</option>
           <option value="ZA">Sort: Z → A</option>
           <option value="sellingPrice">Sort: Sell Price ↓</option>
@@ -339,12 +341,22 @@ export default function Products() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {paginated.map((product) => {
+              {paginated.map((product, idx) => {
                 const isOut = product.trackInventory && product.stock <= 0;
                 const isLow = product.trackInventory && product.stock > 0 && product.stock <= product.minStockAlert;
                 const reserved = product.reservedStock || 0;
                 const available = Math.max(0, product.stock - reserved);
+                const prevCat = idx > 0 ? paginated[idx - 1].category : null;
+                const showCatHeader = sortBy === "category" && product.category !== prevCat;
                 return (
+                  <>
+                  {showCatHeader && (
+                    <tr key={`cat-${product.category}`}>
+                      <td colSpan={isAdmin ? 10 : 9} className="px-5 py-2 bg-orange-50 text-xs text-orange-700 uppercase tracking-wide border-t border-orange-100">
+                        {product.category || "Uncategorised"}
+                      </td>
+                    </tr>
+                  )}
                   <tr key={product.id} className={`hover:bg-gray-50 group ${isOut ? "opacity-60" : ""}`}>
                     <td className="px-5 py-4">
                       <p className="font-medium text-gray-800">{product.name}</p>
@@ -412,6 +424,7 @@ export default function Products() {
                       )}
                     </td>
                   </tr>
+                  </>
                 );
               })}
             </tbody>

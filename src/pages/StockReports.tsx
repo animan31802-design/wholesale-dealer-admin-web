@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import {
   collection, getDocs, orderBy, query, collectionGroup
 } from "firebase/firestore";
@@ -206,19 +206,23 @@ function CurrentStockReport({ products }: { products: Product[] }) {
   const [search, setSearch] = useState("");
   const [catFilter, setCatFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState<"all" | "ok" | "low" | "out">("all");
+  const [sortBy, setSortBy] = useState<"category" | "name" | "stock">("category");
 
   const tracked = products.filter(p => p.trackInventory);
   const cats = ["All", ...Array.from(new Set(tracked.map(p => p.category).filter(Boolean)))];
 
   const filtered = useMemo(() => {
-    let list = tracked;
+    let list = [...tracked];
     if (search) list = list.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
     if (catFilter !== "All") list = list.filter(p => p.category === catFilter);
     if (statusFilter === "ok")  list = list.filter(p => p.stock > p.minStockAlert);
     if (statusFilter === "low") list = list.filter(p => p.stock > 0 && p.stock <= p.minStockAlert);
     if (statusFilter === "out") list = list.filter(p => p.stock <= 0);
+    if (sortBy === "category") list.sort((a, b) => (a.category || "").localeCompare(b.category || "") || a.name.localeCompare(b.name));
+    else if (sortBy === "name")  list.sort((a, b) => a.name.localeCompare(b.name));
+    else if (sortBy === "stock") list.sort((a, b) => a.stock - b.stock);
     return list;
-  }, [tracked, search, catFilter, statusFilter]);
+  }, [tracked, search, catFilter, statusFilter, sortBy]);
 
   const HEADERS = ["Product", "Category", "Unit", "Stock", "Reserved", "Available", "Min Alert", "Status"];
   const getRows = () => filtered.map(p => [
@@ -243,6 +247,12 @@ function CurrentStockReport({ products }: { products: Product[] }) {
         <select value={catFilter} onChange={e => setCatFilter(e.target.value)}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300">
           {cats.map(c => <option key={c}>{c}</option>)}
+        </select>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value as any)}
+          className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300">
+          <option value="category">Sort: Category</option>
+          <option value="name">Sort: Name A→Z</option>
+          <option value="stock">Sort: Stock ↑</option>
         </select>
         <div className="flex gap-1">
           {(["all","ok","low","out"] as const).map(s => (
@@ -286,31 +296,41 @@ function CurrentStockReport({ products }: { products: Product[] }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {filtered.map(p => {
+            {filtered.map((p, idx) => {
               const isOut = p.stock <= 0;
               const isLow = !isOut && p.stock <= p.minStockAlert;
               const reserved = p.reservedStock || 0;
               const available = Math.max(0, p.stock - reserved);
+              const showCatHdr = sortBy === "category" && p.category !== (idx > 0 ? filtered[idx-1].category : null);
               return (
-                <tr key={p.id} className="hover:bg-gray-50">
-                  <td className="px-5 py-3 font-medium text-gray-800">{p.name}</td>
-                  <td className="px-5 py-3 text-gray-500">
-                    <span className="bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded-full">{p.category || "—"}</span>
-                  </td>
-                  <td className="px-5 py-3 text-center text-gray-500 text-xs">{p.unit}</td>
-                  <td className="px-5 py-3 text-right font-semibold text-gray-800">{fmtNum(p.stock)}</td>
-                  <td className="px-5 py-3 text-right text-gray-400">{reserved ? fmtNum(reserved) : "—"}</td>
-                  <td className="px-5 py-3 text-right font-medium text-gray-700">{fmtNum(available)}</td>
-                  <td className="px-5 py-3 text-right text-gray-400">{fmtNum(p.minStockAlert)}</td>
-                  <td className="px-5 py-3 text-center">
-                    {isOut
-                      ? <span className="bg-red-100 text-red-600 text-xs px-2 py-0.5 rounded-full font-medium">Out of Stock</span>
-                      : isLow
-                      ? <span className="bg-yellow-100 text-yellow-700 text-xs px-2 py-0.5 rounded-full font-medium">Low Stock</span>
-                      : <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full font-medium">OK</span>
-                    }
-                  </td>
-                </tr>
+                <React.Fragment key={p.id}>
+                  {showCatHdr && (
+                    <tr>
+                      <td colSpan={8} className="px-5 py-2 bg-orange-50 text-xs text-orange-700 uppercase tracking-wide border-t border-orange-100">
+                        {p.category || "Uncategorised"}
+                      </td>
+                    </tr>
+                  )}
+                  <tr className="hover:bg-gray-50">
+                    <td className="px-5 py-3 font-medium text-gray-800">{p.name}</td>
+                    <td className="px-5 py-3 text-gray-500">
+                      <span className="bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded-full">{p.category || "—"}</span>
+                    </td>
+                    <td className="px-5 py-3 text-center text-gray-500 text-xs">{p.unit}</td>
+                    <td className="px-5 py-3 text-right font-semibold text-gray-800">{fmtNum(p.stock)}</td>
+                    <td className="px-5 py-3 text-right text-gray-400">{reserved ? fmtNum(reserved) : "—"}</td>
+                    <td className="px-5 py-3 text-right font-medium text-gray-700">{fmtNum(available)}</td>
+                    <td className="px-5 py-3 text-right text-gray-400">{fmtNum(p.minStockAlert)}</td>
+                    <td className="px-5 py-3 text-center">
+                      {isOut
+                        ? <span className="bg-red-100 text-red-600 text-xs px-2 py-0.5 rounded-full font-medium">Out of Stock</span>
+                        : isLow
+                        ? <span className="bg-yellow-100 text-yellow-700 text-xs px-2 py-0.5 rounded-full font-medium">Low Stock</span>
+                        : <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full font-medium">OK</span>
+                      }
+                    </td>
+                  </tr>
+                </React.Fragment>
               );
             })}
           </tbody>
@@ -328,10 +348,17 @@ function CurrentStockReport({ products }: { products: Product[] }) {
 // 2. Low Stock & Out of Stock
 // ═══════════════════════════════════════════════════════════════════
 function LowStockReport({ products }: { products: Product[] }) {
+  const [lsSortBy, setLsSortBy] = useState<"category" | "name" | "stock">("category");
   const tracked = products.filter(p => p.trackInventory);
   const outOfStock = tracked.filter(p => p.stock <= 0);
   const lowStock   = tracked.filter(p => p.stock > 0 && p.stock <= p.minStockAlert);
-  const reorderList = [...outOfStock, ...lowStock];
+  const reorderList = React.useMemo(() => {
+    const list = [...outOfStock, ...lowStock];
+    if (lsSortBy === "category") list.sort((a, b) => (a.category || "").localeCompare(b.category || "") || a.name.localeCompare(b.name));
+    else if (lsSortBy === "name")  list.sort((a, b) => a.name.localeCompare(b.name));
+    else if (lsSortBy === "stock") list.sort((a, b) => a.stock - b.stock);
+    return list;
+  }, [products, lsSortBy]);
 
   const LS_HEADERS = ["Product", "Category", "Unit", "Current Stock", "Min Alert", "Status"];
   const getLsRows = () => reorderList.map(p => [
@@ -367,7 +394,13 @@ function LowStockReport({ products }: { products: Product[] }) {
         <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
           <div className="flex items-start justify-between px-4 md:px-5 py-4 border-b border-gray-100 gap-2 flex-wrap">
             <p className="font-semibold text-gray-800">Reorder List <span className="text-gray-400 font-normal text-sm">({reorderList.length} products)</span></p>
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center flex-wrap">
+              <select value={lsSortBy} onChange={e => setLsSortBy(e.target.value as any)}
+                className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300">
+                <option value="category">Group: Category</option>
+                <option value="name">Sort: Name A→Z</option>
+                <option value="stock">Sort: Stock ↑</option>
+              </select>
               <button onClick={handlePrint}
                 className="flex items-center gap-2 border border-gray-300 text-gray-600 px-4 py-2 rounded-lg text-sm hover:bg-gray-50">
                 🖨️ Print
@@ -390,27 +423,37 @@ function LowStockReport({ products }: { products: Product[] }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {reorderList.map(p => {
+              {reorderList.map((p, idx) => {
                 const isOut = p.stock <= 0;
                 const shortfall = Math.max(0, p.minStockAlert - p.stock);
+                const showCatHdr = lsSortBy === "category" && p.category !== (idx > 0 ? reorderList[idx-1].category : null);
                 return (
-                  <tr key={p.id} className="hover:bg-gray-50">
-                    <td className="px-5 py-3 font-medium text-gray-800">{p.name}</td>
-                    <td className="px-5 py-3 text-gray-500 text-xs">{p.category || "—"}</td>
-                    <td className={`px-5 py-3 text-right font-bold ${isOut ? "text-red-600" : "text-yellow-600"}`}>
-                      {fmtNum(p.stock)} {p.unit}
-                    </td>
-                    <td className="px-5 py-3 text-right text-gray-400">{fmtNum(p.minStockAlert)} {p.unit}</td>
-                    <td className="px-5 py-3 text-right text-orange-600 font-medium">
-                      {shortfall > 0 ? `+${fmtNum(shortfall)} needed` : "—"}
-                    </td>
-                    <td className="px-5 py-3 text-center">
-                      {isOut
-                        ? <span className="bg-red-100 text-red-600 text-xs px-2 py-0.5 rounded-full font-medium">🔴 Out</span>
-                        : <span className="bg-yellow-100 text-yellow-700 text-xs px-2 py-0.5 rounded-full font-medium">⚠️ Low</span>
-                      }
-                    </td>
-                  </tr>
+                  <React.Fragment key={p.id}>
+                    {showCatHdr && (
+                      <tr>
+                        <td colSpan={6} className="px-5 py-2 bg-orange-50 text-xs font-semibold text-orange-700 uppercase tracking-wide border-t border-orange-100">
+                          {p.category || "Uncategorised"}
+                        </td>
+                      </tr>
+                    )}
+                    <tr className="hover:bg-gray-50">
+                      <td className="px-5 py-3 font-medium text-gray-800">{p.name}</td>
+                      <td className="px-5 py-3 text-gray-500 text-xs">{p.category || "—"}</td>
+                      <td className={`px-5 py-3 text-right font-bold ${isOut ? "text-red-600" : "text-yellow-600"}`}>
+                        {fmtNum(p.stock)} {p.unit}
+                      </td>
+                      <td className="px-5 py-3 text-right text-gray-400">{fmtNum(p.minStockAlert)} {p.unit}</td>
+                      <td className="px-5 py-3 text-right text-orange-600 font-medium">
+                        {shortfall > 0 ? `+${fmtNum(shortfall)} needed` : "—"}
+                      </td>
+                      <td className="px-5 py-3 text-center">
+                        {isOut
+                          ? <span className="bg-red-100 text-red-600 text-xs px-2 py-0.5 rounded-full font-medium">🔴 Out</span>
+                          : <span className="bg-yellow-100 text-yellow-700 text-xs px-2 py-0.5 rounded-full font-medium">⚠️ Low</span>
+                        }
+                      </td>
+                    </tr>
+                  </React.Fragment>
                 );
               })}
             </tbody>
