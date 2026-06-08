@@ -21,12 +21,11 @@ const adminNavItems: NavItem[] = [
   { path: "/orders", label: "Orders", icon: "📦" },
   { path: "/create-order", label: "Create Order", icon: "➕" },
   { path: "/packing", label: "Packing View", icon: "📋" },
+  { path: "/processing", label: "Processing", icon: "⚙️" },
   { path: "/products", label: "Products", icon: "🛒" },
   { path: "/customers", label: "Customers", icon: "🏪" },
   { path: "/users", label: "Users", icon: "👥" },
   { path: "/agent-cash", label: "Agent Cash", icon: "💵" },
-  { path: "/staff", label: "Staff", icon: "🧑‍🏭" },
-  { path: "/attendance", label: "Attendance", icon: "✅" },
 
   // Reports Group
   {
@@ -63,11 +62,6 @@ const adminNavItems: NavItem[] = [
         label: "Agent Reports",
         icon: "👥",
       },
-      {
-        path: "/reports/attendance",
-        label: "Attendance Reports",
-        icon: "✅",
-      },
     ],
   },
 ];
@@ -75,11 +69,10 @@ const adminNavItems: NavItem[] = [
 // Packing staff — no create order access
 const packingNavItems: NavItem[] = [
   { path: "/orders", label: "Orders", icon: "📦" },
-  { path: "/create-order", label: "Create Order", icon: "➕" },
   { path: "/packing", label: "Packing View", icon: "📋" },
+  { path: "/processing", label: "Processing", icon: "⚙️" },
   { path: "/products", label: "Products", icon: "🛒" },
   { path: "/customers", label: "Customers", icon: "🏪" },
-  { path: "/attendance", label: "Attendance", icon: "✅" },
 ];
 
 export default function Layout() {

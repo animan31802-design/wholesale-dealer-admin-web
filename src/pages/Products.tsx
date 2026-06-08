@@ -10,6 +10,7 @@ import { useAuthStore } from "../store/authStore";
 import { useModalKeyboard } from "../hooks/useModalKeyboard";
 import Pagination from "../components/Pagination";
 import { useTamilSearch } from "../utils/UseTamilSearch";
+import { useNavigate } from "react-router-dom";
 import { TamilSearchInput } from "../components/TamilSearchInput";
 
 const UNITS: ProductUnit[] = ["Piece", "KG", "Gram", "Liter", "ML", "Box", "Packet", "Dozen", "Bag", "Bottle", "Other"];
@@ -62,6 +63,7 @@ export default function Products() {
   const [deleteConfirm, setDeleteConfirm] = useState<Product | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const { user } = useAuthStore();
+  const navigate = useNavigate();
   const isAdmin = user?.role === "admin";
   const isPackingStaff = user?.role === "packing_staff";
   const [stockModal, setStockModal] = useState<Product | null>(null);
@@ -267,6 +269,8 @@ export default function Products() {
               <button onClick={() => fileRef.current?.click()} className="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm hover:bg-gray-50">⬆️ Import CSV</button>
               <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleImport} />
               <button onClick={handleExport} className="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm hover:bg-gray-50">⬇️ Export CSV</button>
+              <button onClick={() => navigate("/processing")}
+                className="border border-orange-400 text-orange-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-50">⚙️ Process Stock</button>
               <button onClick={() => { setForm(emptyProduct()); setEditId(null); setShowForm(true); }}
                 className="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-600">+ Add Product</button>
             </>
@@ -352,7 +356,7 @@ export default function Products() {
                   <>
                   {showCatHeader && (
                     <tr key={`cat-${product.category}`}>
-                      <td colSpan={isAdmin ? 10 : 9} className="px-5 py-2 bg-orange-50 text-xs text-orange-700 uppercase tracking-wide border-t border-orange-100">
+                      <td colSpan={isAdmin ? 10 : 9} className="px-5 py-2 bg-orange-50 text-xs font-semibold text-orange-700 uppercase tracking-wide border-t border-orange-100">
                         {product.category || "Uncategorised"}
                       </td>
                     </tr>
