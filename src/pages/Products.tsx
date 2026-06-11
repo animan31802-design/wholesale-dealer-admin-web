@@ -28,12 +28,16 @@ const FRACTIONAL_UNITS: ProductUnit[] = ["KG", "Gram", "Liter", "ML"];
 type StockFilter = "ALL" | "LOW_STOCK" | "OUT_OF_STOCK";
 type SortMode = "category" | "AZ" | "ZA" | "sellingPrice" | "costPrice" | "stock";
 
+const CLOUDINARY_CLOUD_NAME = "drqh2oeb1";
+const CLOUDINARY_UPLOAD_PRESET = "wholesale_products";
+
 const emptyProduct = (): Product => ({
   name: "", category: "", unit: "Piece",
   sellingPrice: 0, costPrice: 0, gst: "none",
   trackInventory: true, stock: 0, minStockAlert: 0,
   safetyBuffer: { type: "fixed", value: 0 },
   sellInFraction: false, priceSlabs: [], barcode: "", hsn: "", taxInclusive: false,
+  coverImage: "", productImages: [],
 });
 
 // Whether a product should allow decimal stock entry
@@ -70,6 +74,10 @@ export default function Products() {
   const [ledgerModal, setLedgerModal] = useState<Product | null>(null);
   const [page, setPage] = useState(1);
   const PER_PAGE = 25;
+  const [coverUploading, setCoverUploading] = useState(false);
+  const [galleryUploading, setGalleryUploading] = useState(false);
+  const coverInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const unsub = onSnapshot(query(collection(db, "products"), orderBy("name")), (snap) => {
@@ -112,6 +120,54 @@ export default function Products() {
   const allCategories   = ["All", ...categories];
   const stockValue      = filtered.reduce((s, p) => s + (p.sellingPrice * p.stock), 0);
 
+  // ── Cloudinary upload helpers ─────────────────────────────────────────────
+  const uploadToCloudinary = async (file: File): Promise<string> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+    const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`, {
+      method: "POST",
+      body: formData,
+    });
+    if (!res.ok) throw new Error("Upload failed");
+    const data = await res.json();
+    return data.secure_url as string;
+  };
+
+  const handleCoverImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setCoverUploading(true);
+    try {
+      const url = await uploadToCloudinary(file);
+      setForm((f) => ({ ...f, coverImage: url }));
+    } catch {
+      alert("Cover image upload failed. Please try again.");
+    } finally {
+      setCoverUploading(false);
+      e.target.value = "";
+    }
+  };
+
+  const handleGalleryImagesChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    setGalleryUploading(true);
+    try {
+      const urls = await Promise.all(files.map(uploadToCloudinary));
+      setForm((f) => ({ ...f, productImages: [...(f.productImages || []), ...urls] }));
+    } catch {
+      alert("One or more gallery uploads failed. Please try again.");
+    } finally {
+      setGalleryUploading(false);
+      e.target.value = "";
+    }
+  };
+
+  const removeGalleryImage = (idx: number) => {
+    setForm((f) => ({ ...f, productImages: (f.productImages || []).filter((_, i) => i !== idx) }));
+  };
+
   // ── CRUD ──────────────────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -138,7 +194,13 @@ export default function Products() {
   };
 
   const handleEdit = (product: Product) => {
-    setForm({ ...product, safetyBuffer: product.safetyBuffer || { type: "fixed", value: 0 }, priceSlabs: product.priceSlabs || [] });
+    setForm({
+      ...product,
+      safetyBuffer: product.safetyBuffer || { type: "fixed", value: 0 },
+      priceSlabs: product.priceSlabs || [],
+      coverImage: product.coverImage || "",
+      productImages: product.productImages || [],
+    });
     setEditId(product.id!); setShowForm(true);
   };
 
@@ -363,11 +425,20 @@ export default function Products() {
                   )}
                   <tr key={product.id} className={`hover:bg-gray-50 group ${isOut ? "opacity-60" : ""}`}>
                     <td className="px-5 py-4">
-                      <p className="font-medium text-gray-800">{product.name}</p>
-                      <div className="flex gap-1.5 mt-0.5 flex-wrap">
-                        {product.sellInFraction && <span className="text-[10px] text-blue-500">Fractions</span>}
-                        {FRACTIONAL_UNITS.includes(product.unit) && !product.sellInFraction && <span className="text-[10px] text-indigo-400">Decimal stock</span>}
-                        {product.trackInventory  && <span className="text-[10px] text-green-500">Tracked</span>}
+                      <div className="flex items-center gap-3">
+                        {product.coverImage
+                          ? <img src={product.coverImage} alt={product.name} className="w-10 h-10 rounded-lg object-cover flex-shrink-0 border border-gray-100" />
+                          : <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 text-gray-300 text-lg">📦</div>
+                        }
+                        <div>
+                          <p className="font-medium text-gray-800">{product.name}</p>
+                          <div className="flex gap-1.5 mt-0.5 flex-wrap">
+                            {product.sellInFraction && <span className="text-[10px] text-blue-500">Fractions</span>}
+                            {FRACTIONAL_UNITS.includes(product.unit) && !product.sellInFraction && <span className="text-[10px] text-indigo-400">Decimal stock</span>}
+                            {product.trackInventory  && <span className="text-[10px] text-green-500">Tracked</span>}
+                            {(product.productImages?.length ?? 0) > 0 && <span className="text-[10px] text-purple-400">🖼 {product.productImages!.length} img{product.productImages!.length > 1 ? "s" : ""}</span>}
+                          </div>
+                        </div>
                       </div>
                     </td>
                     <td className="px-5 py-4">
@@ -494,6 +565,85 @@ export default function Products() {
                 <Field label="Barcode (Optional)">
                   <input value={form.barcode || ""} onChange={(e) => setForm({ ...form, barcode: e.target.value })} placeholder="Scan or type barcode" className={inputCls} />
                 </Field>
+              </Section>
+
+              {/* ── Product Images ─────────────────────────────────────── */}
+              <Section title="Product Images">
+                {/* Cover Image */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Cover Image <span className="text-gray-400 font-normal">(shown in all product lists)</span>
+                  </label>
+                  <div className="flex items-start gap-4">
+                    {/* Preview */}
+                    <div className="w-24 h-24 rounded-xl border-2 border-dashed border-gray-200 overflow-hidden flex items-center justify-center bg-gray-50 flex-shrink-0">
+                      {form.coverImage
+                        ? <img src={form.coverImage} alt="Cover" className="w-full h-full object-cover" />
+                        : <span className="text-3xl">📦</span>
+                      }
+                    </div>
+                    <div className="flex flex-col gap-2 flex-1">
+                      <button
+                        type="button"
+                        disabled={coverUploading}
+                        onClick={() => coverInputRef.current?.click()}
+                        className="border border-gray-300 text-gray-600 px-4 py-2 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 w-fit"
+                      >
+                        {coverUploading ? (
+                          <><span className="animate-spin inline-block w-4 h-4 border-2 border-orange-400 border-t-transparent rounded-full" /> Uploading...</>
+                        ) : (
+                          <>📷 {form.coverImage ? "Change Cover Image" : "Upload Cover Image"}</>
+                        )}
+                      </button>
+                      {form.coverImage && (
+                        <button type="button" onClick={() => setForm((f) => ({ ...f, coverImage: "" }))}
+                          className="text-xs text-red-400 hover:text-red-600 w-fit">
+                          ✕ Remove cover image
+                        </button>
+                      )}
+                      <p className="text-xs text-gray-400">JPG, PNG, WEBP · Max 10MB · Recommended: square image</p>
+                    </div>
+                    <input ref={coverInputRef} type="file" accept="image/*" className="hidden" onChange={handleCoverImageChange} />
+                  </div>
+                </div>
+
+                {/* Gallery Images */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Additional Product Images <span className="text-gray-400 font-normal">(optional gallery)</span>
+                  </label>
+
+                  {/* Existing gallery thumbnails */}
+                  {(form.productImages?.length ?? 0) > 0 && (
+                    <div className="flex flex-wrap gap-3 mb-3">
+                      {form.productImages!.map((url, idx) => (
+                        <div key={idx} className="relative group w-20 h-20">
+                          <img src={url} alt={`Product ${idx + 1}`} className="w-full h-full object-cover rounded-xl border border-gray-200" />
+                          <button
+                            type="button"
+                            onClick={() => removeGalleryImage(idx)}
+                            className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full w-5 h-5 text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow"
+                          >✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={galleryUploading}
+                    onClick={() => galleryInputRef.current?.click()}
+                    className="border border-dashed border-gray-300 text-gray-500 px-4 py-2.5 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 w-full justify-center"
+                  >
+                    {galleryUploading ? (
+                      <><span className="animate-spin inline-block w-4 h-4 border-2 border-orange-400 border-t-transparent rounded-full" /> Uploading images...</>
+                    ) : (
+                      <>🖼 Add More Images {(form.productImages?.length ?? 0) > 0 ? `(${form.productImages!.length} uploaded)` : ""}</>
+                    )}
+                  </button>
+                  <input ref={galleryInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleGalleryImagesChange} />
+                  <p className="text-xs text-gray-400 mt-1.5">You can select multiple images at once. Hover a thumbnail to remove it.</p>
+                </div>
               </Section>
 
               <Section title="Pricing">

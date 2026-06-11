@@ -75,6 +75,8 @@ export interface Product {
   barcode?: string;
   hsn?: string;
   taxInclusive?: boolean;
+  coverImage?: string;        // Cloudinary URL — shown in all product list views
+  productImages?: string[];   // Cloudinary URLs — additional product gallery images
   createdAt?: string;
   updatedAt?: string;
 }

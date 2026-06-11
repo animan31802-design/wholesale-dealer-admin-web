@@ -22,6 +22,9 @@ import AgentReports from "./pages/AgentReports";
 import OrderReports from "./pages/OrderReports";
 import CustomerReports from "./pages/CustomerReports";
 import AgentCashCollection from "./pages/AgentCashCollection";
+import Staff from "./pages/Staff";
+import StaffAttendance from "./pages/StaffAttendance";
+import StaffAttendanceReports from "./pages/StaffAttendanceReports";
 import Layout from "./components/Layout";
 import ProcessingStation from "./pages/ProcessingStation";
 
@@ -147,6 +150,10 @@ export default function App() {
           <Route path="reports/agent"  element={<AdminRoute><AgentReports /></AdminRoute>} />
           <Route path="reports/orders"   element={<AdminRoute><OrderReports /></AdminRoute>} />
           <Route path="reports/customer"  element={<AdminRoute><CustomerReports /></AdminRoute>} />
+
+          {/* Staff & Attendance — admin only for staff mgmt, packing staff can mark attendance */}
+          <Route path="staff"      element={<AdminRoute><Staff /></AdminRoute>} />
+          <Route path="attendance" element={<OpsRoute><StaffAttendance /></OpsRoute>} />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />

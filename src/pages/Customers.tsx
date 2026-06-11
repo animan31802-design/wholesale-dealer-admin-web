@@ -341,8 +341,8 @@ ${skipped} rows skipped (missing shop name or phone)`);
                 <th className="px-5 py-4">Shop Name</th>
                 <th className="px-5 py-4">Owner</th>
                 <th className="px-5 py-4">Phone</th>
-                <th className="px-5 py-4">Region</th>
                 <th className="px-5 py-4">Area</th>
+                <th className="px-5 py-4">Region</th>
                 <th className="px-5 py-4">Outstanding Due</th>
                 <th className="px-5 py-4">Last Order</th>
                 <th className="px-5 py-4">Location</th>
@@ -363,12 +363,12 @@ ${skipped} rows skipped (missing shop name or phone)`);
                     </td>
                     <td className="px-5 py-3 text-gray-700">{customer.ownerName}</td>
                     <td className="px-5 py-3 text-gray-600">{customer.phone}</td>
+                    <td className="px-5 py-3 text-gray-600">{customer.area}</td>
                     <td className="px-5 py-3">
                       <span className="bg-orange-100 text-orange-700 text-xs px-2 py-1 rounded-full font-medium">
                         {customer.regionName || "—"}
                       </span>
                     </td>
-                    <td className="px-5 py-3 text-gray-600">{customer.area}</td>
                     <td className="px-5 py-3">
                       {due > 0 ? (
                         <button onClick={() => setLedgerCustomer(customer)}
