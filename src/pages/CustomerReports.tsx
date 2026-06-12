@@ -89,6 +89,8 @@ export default function CustomerReports() {
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [topN, setTopN]                   = useState(10);
+  const [dueSearch, setDueSearch]         = useState("");
+  const [dueRegion, setDueRegion]         = useState("All");
 
   useEffect(() => {
     const u1 = onSnapshot(
@@ -112,13 +114,12 @@ export default function CustomerReports() {
     }), [orders, fromDate, toDate]
   );
 
-  // ── 1. Outstanding dues ──────────────────────────────────────────
-  const dueData = useMemo(() =>
+  // ── 1. Customer balance data ─────────────────────────────────────
+  const allCustomerBalances = useMemo(() =>
     customers
-      .filter((c) => (c.outstandingDue || 0) > 0)
       .map((c) => ({
         id: c.id, shopName: c.shopName, ownerName: c.ownerName,
-        phone: c.phone, region: c.regionName, area: c.area,
+        phone: c.phone, region: c.regionName || "—", area: c.area || "—",
         due: c.outstandingDue || 0,
         creditLimit: c.creditLimit || 0,
         overLimit: c.creditLimit ? (c.outstandingDue || 0) > c.creditLimit : false,
@@ -126,7 +127,28 @@ export default function CustomerReports() {
       .sort((a, b) => b.due - a.due),
     [customers]
   );
+
+  // Summary: customers with a due balance
+  const dueData = useMemo(() => allCustomerBalances.filter((c) => c.due > 0), [allCustomerBalances]);
   const totalDue = dueData.reduce((s, c) => s + c.due, 0);
+
+  // All unique regions for filter dropdown
+  const dueRegions = useMemo(() => {
+    const set = new Set(allCustomerBalances.map((c) => c.region).filter((r) => r && r !== "—"));
+    return ["All", ...Array.from(set).sort()];
+  }, [allCustomerBalances]);
+
+  // Filtered + searched view (all customers, not just those with due)
+  const filteredDueData = useMemo(() => {
+    const q = dueSearch.toLowerCase().trim();
+    return allCustomerBalances.filter((c) => {
+      if (dueRegion !== "All" && c.region !== dueRegion) return false;
+      if (q && !c.shopName.toLowerCase().includes(q) &&
+               !c.ownerName.toLowerCase().includes(q) &&
+               !(c.phone || "").includes(q)) return false;
+      return true;
+    });
+  }, [allCustomerBalances, dueSearch, dueRegion]);
 
   // ── 2. Top customers by order value ─────────────────────────────
   const topCustomerData = useMemo(() => {
@@ -233,15 +255,15 @@ export default function CustomerReports() {
     let sheetName   = "Customer Report";
 
     if (activeTab === "outstanding_dues") {
-      sheetName = "Outstanding Dues";
-      rows = dueData.map((c) => ({
+      sheetName = "Customer Balances";
+      rows = filteredDueData.map((c) => ({
         "Shop Name": c.shopName, "Owner": c.ownerName, "Phone": c.phone,
         "Region": c.region, "Area": c.area,
-        "Outstanding Due (₹)": c.due.toFixed(2),
+        "Balance Due (₹)": c.due.toFixed(2),
         "Credit Limit (₹)": c.creditLimit || "—",
-        "Over Limit?": c.overLimit ? "Yes" : "No",
+        "Status": c.due <= 0 ? "Clear" : c.overLimit ? "Over Limit" : "Due",
       }));
-      rows.push({ "Shop Name": "TOTAL", "Outstanding Due (₹)": totalDue.toFixed(2) });
+      rows.push({ "Shop Name": "TOTAL", "Balance Due (₹)": filteredDueData.reduce((s,c)=>s+c.due,0).toFixed(2) });
     } else if (activeTab === "top_customers") {
       sheetName = "Top Customers";
       rows = topCustomerData.map((c, i) => ({
@@ -322,7 +344,7 @@ export default function CustomerReports() {
   const rangeLabel = dateRange === "all" ? "All time" : dateRange === "7d" ? "Last 7 days" : dateRange === "30d" ? "Last 30 days" : dateRange === "90d" ? "Last 90 days" : `${customFrom} to ${customTo}`;
 
   const TABS: { key: CustReportTab; label: string; icon: string }[] = [
-    { key: "outstanding_dues",  label: "Outstanding Dues",   icon: "⚠️" },
+    { key: "outstanding_dues",  label: "Customer Balances",    icon: "💰" },
     { key: "top_customers",     label: "Top Customers",      icon: "🏆" },
     { key: "order_frequency",   label: "Order Frequency",    icon: "🔄" },
     { key: "by_region",         label: "By Region",          icon: "🗺️" },
@@ -417,45 +439,152 @@ export default function CustomerReports() {
       {/* Print area */}
       <div id="cr-print-area">
 
-        {/* ── 1. Outstanding Dues ─────────────────────────────── */}
+        {/* ── 1. Customer Balances ─────────────────────────────── */}
         {activeTab === "outstanding_dues" && (
-          <div className="space-y-5">
-            {/* Dues bar chart */}
-            {dueData.length > 0 && (
+          <div className="space-y-4">
+
+            {/* Search + Region filter bar */}
+            <div className="flex flex-wrap gap-3 items-center">
+              <div className="relative flex-1 min-w-[200px] max-w-sm">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
+                <input
+                  type="text"
+                  placeholder="Search shop, owner, phone…"
+                  value={dueSearch}
+                  onChange={(e) => setDueSearch(e.target.value)}
+                  className="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                />
+              </div>
+              <select
+                value={dueRegion}
+                onChange={(e) => setDueRegion(e.target.value)}
+                className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+              >
+                {dueRegions.map((r) => <option key={r}>{r}</option>)}
+              </select>
+              <span className="text-sm text-gray-400 ml-auto">
+                {filteredDueData.length} of {allCustomerBalances.length} customers
+                {dueRegion !== "All" || dueSearch ? ` · filtered` : ""}
+              </span>
+            </div>
+
+            {/* Top dues bar chart — only when not searching */}
+            {!dueSearch && dueData.length > 0 && (
               <div className="bg-white rounded-2xl shadow-sm p-5">
-                <h3 className="text-sm font-semibold text-gray-700 mb-4">Top 15 Outstanding Dues</h3>
+                <h3 className="text-sm font-semibold text-gray-700 mb-4">
+                  Top 15 — Highest Outstanding Balance
+                  {dueRegion !== "All" && <span className="text-orange-500 font-normal ml-1">· {dueRegion}</span>}
+                </h3>
                 <ResponsiveContainer width="100%" height={240}>
-                  <BarChart data={dueData.slice(0, 15)} layout="vertical" margin={{ top: 0, right: 10, left: 0, bottom: 0 }}>
+                  <BarChart data={filteredDueData.filter(c => c.due > 0).slice(0, 15)} layout="vertical" margin={{ top: 0, right: 10, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis type="number" tick={{ fontSize: 10, fill: "#9ca3af" }} tickLine={false} axisLine={false}
                       tickFormatter={(v) => `₹${v >= 1000 ? (v/1000).toFixed(0)+"k" : v}`} />
-                    <YAxis type="category" dataKey="shopName" tick={{ fontSize: 10, fill: "#374151" }} tickLine={false} axisLine={false} width={100} />
-                    <Tooltip formatter={(v: any) => [formatCurrency(Number(v)), "Outstanding Due"]} contentStyle={{ borderRadius: 8, fontSize: 12 }} />
+                    <YAxis type="category" dataKey="shopName" tick={{ fontSize: 10, fill: "#374151" }} tickLine={false} axisLine={false} width={110} />
+                    <Tooltip formatter={(v: any) => [formatCurrency(Number(v)), "Balance Due"]} contentStyle={{ borderRadius: 8, fontSize: 12 }} />
                     <Bar dataKey="due" radius={[0, 4, 4, 0]}>
-                      {dueData.slice(0, 15).map((_, i) => (
-                        <Cell key={i} fill={_.overLimit ? "#ef4444" : "#f97316"} />
+                      {filteredDueData.filter(c => c.due > 0).slice(0, 15).map((entry, i) => (
+                        <Cell key={i} fill={entry.overLimit ? "#ef4444" : "#f97316"} />
                       ))}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
-                <p className="text-xs text-gray-400 mt-2">🔴 Red = over credit limit</p>
+                <p className="text-xs text-gray-400 mt-2">🔴 Red = over credit limit · 🟠 Orange = within limit</p>
               </div>
             )}
 
-            <CRTable
-              title={`All Customers with Outstanding Dues (${dueData.length})`}
-              headers={["Shop Name", "Owner", "Phone", "Region", "Outstanding Due", "Credit Limit", "Status"]}
-              rows={dueData.map((c) => [
-                c.shopName, c.ownerName, c.phone, c.region,
-                <span className="font-bold text-red-600">{formatCurrency(c.due)}</span>,
-                c.creditLimit ? formatCurrency(c.creditLimit) : "—",
-                c.overLimit
-                  ? <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-medium">Over Limit</span>
-                  : <span className="text-xs bg-green-100 text-green-600 px-2 py-0.5 rounded-full font-medium">Within Limit</span>,
-              ])}
-              totals={["Total", "", "", "", <span className="font-bold text-red-600">{formatCurrency(totalDue)}</span>, "", `${dueData.filter(c=>c.overLimit).length} over limit`]}
-              emptyText="No customers with outstanding dues 🎉"
-            />
+            {/* Full customer balance table */}
+            <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
+              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-700">
+                    All Customer Balances
+                  </h3>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {dueData.length} with balance due · Total outstanding: <span className="font-semibold text-red-600">{formatCurrency(totalDue)}</span>
+                  </p>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm min-w-[540px]">
+                  <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
+                    <tr>
+                      <th className="px-5 py-3 text-left">#</th>
+                      <th className="px-5 py-3 text-left">Shop Name</th>
+                      <th className="px-5 py-3 text-left">Owner</th>
+                      <th className="px-5 py-3 text-left">Phone</th>
+                      <th className="px-5 py-3 text-left">Region</th>
+                      <th className="px-5 py-3 text-right">Balance Due</th>
+                      <th className="px-5 py-3 text-right">Credit Limit</th>
+                      <th className="px-5 py-3 text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {filteredDueData.map((c, i) => (
+                      <tr key={c.id}
+                        className={`hover:bg-orange-50/30 transition-colors ${c.overLimit ? "bg-red-50/20" : ""}`}>
+                        <td className="px-5 py-3 text-gray-400 text-xs">{i + 1}</td>
+                        <td className="px-5 py-3">
+                          <p className="font-medium text-gray-800">{c.shopName}</p>
+                          {c.area && c.area !== "—" && <p className="text-xs text-gray-400">{c.area}</p>}
+                        </td>
+                        <td className="px-5 py-3 text-gray-600 text-xs">{c.ownerName}</td>
+                        <td className="px-5 py-3 text-gray-600 text-xs font-mono">{c.phone}</td>
+                        <td className="px-5 py-3">
+                          <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full">{c.region}</span>
+                        </td>
+                        <td className="px-5 py-3 text-right">
+                          {c.due > 0 ? (
+                            <span className={`font-bold text-base ${c.overLimit ? "text-red-600" : "text-orange-600"}`}>
+                              {formatCurrency(c.due)}
+                            </span>
+                          ) : (
+                            <span className="text-green-600 font-medium text-xs">✓ Clear</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-3 text-right text-gray-400 text-xs">
+                          {c.creditLimit ? formatCurrency(c.creditLimit) : "—"}
+                        </td>
+                        <td className="px-5 py-3 text-center">
+                          {c.due <= 0
+                            ? <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">Clear</span>
+                            : c.overLimit
+                            ? <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-medium">⚠ Over Limit</span>
+                            : <span className="text-xs bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full font-medium">Due</span>
+                          }
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  {filteredDueData.length > 0 && (() => {
+                    const filteredTotal = filteredDueData.reduce((s, c) => s + c.due, 0);
+                    const filteredDueCount = filteredDueData.filter((c) => c.due > 0).length;
+                    return (
+                      <tfoot className="bg-orange-50 border-t-2 border-orange-200">
+                        <tr>
+                          <td colSpan={5} className="px-5 py-3 font-bold text-gray-700">
+                            Total ({filteredDueData.length} customers · {filteredDueCount} with due)
+                          </td>
+                          <td className="px-5 py-3 text-right font-bold text-red-600 text-base">
+                            {formatCurrency(filteredTotal)}
+                          </td>
+                          <td colSpan={2} className="px-5 py-3 text-right text-gray-400 text-xs">
+                            {filteredDueData.filter((c) => c.overLimit).length} over credit limit
+                          </td>
+                        </tr>
+                      </tfoot>
+                    );
+                  })()}
+                </table>
+                {filteredDueData.length === 0 && (
+                  <div className="text-center py-12 text-gray-400">
+                    {dueSearch || dueRegion !== "All"
+                      ? "No customers match your search / filter."
+                      : "No customers found."}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
