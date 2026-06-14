@@ -101,6 +101,8 @@ export type OrderStatus =
   | "attempted"
   | "returned_to_warehouse"
   | "delivered"
+  | "partially_delivered"
+  | "partially_delivered_closed"
   | "cancelled";
 
 export interface DeliveryAttempt {
@@ -167,4 +169,24 @@ export interface Order {
   cancelledBy?: string;
   cancelledByName?: string;
   cancellationReason?: string;
+  // ── Partial delivery ─────────────────────────────────────────
+  deliveredItems?: DeliveredItem[];        // what was actually handed to customer
+  partialBilledAmount?: number;           // recalculated total for delivered items only
+  handoverStatus?: "pending_handover" | "handed_over" | "";
+  handoverAt?: string;
+  handoverBy?: string;
+  handoverByName?: string;
+  remainingItemsCancelled?: boolean;
+  parentOrderId?: string;                 // set on follow-up reorders
+  source?: string;                        // "partial_reorder" | etc.
+}
+
+export interface DeliveredItem {
+  productId:     string;
+  productName:   string;
+  unit:          string;
+  price:         number;
+  orderedQty:    number;
+  deliveredQty:  number;   // 0 = customer rejected entirely
+  deliveredTotal: number;  // deliveredQty × price
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import {
-  collection, onSnapshot, doc, runTransaction, query, where
+  collection, onSnapshot, doc, runTransaction, query, where, addDoc
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Order } from "../types";
@@ -40,7 +40,7 @@ export default function PackingStation() {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   // ── Filter state ────────────────────────────────────────────────
-  const [dateFilter, setDateFilter] = useState<DateFilter>("today");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [customDate, setCustomDate] = useState("");
   const [regionFilter, setRegionFilter] = useState("");
 
@@ -62,6 +62,9 @@ export default function PackingStation() {
   const markPacked = async (order: Order) => {
     setConfirmingId(order.id!);
     try {
+      // Capture before values then write atomically
+      const stockChanges: { productId: string; before: number; after: number; qty: number }[] = [];
+
       await runTransaction(db, async (t) => {
         // ── READ PHASE (all reads before any write) ───────────────
         const orderRef     = doc(db, "orders", order.id!);
@@ -74,28 +77,51 @@ export default function PackingStation() {
         const productSnaps = await Promise.all(productRefs.map((ref) => t.get(ref)));
 
         // ── WRITE PHASE ───────────────────────────────────────────
-        // FIX: deduct actual stock and clear reservation for each tracked product
+        const now = new Date().toISOString();
+        stockChanges.length = 0;
         productSnaps.forEach((snap, i) => {
           if (!snap.exists()) return;
           const data = snap.data();
-          if (!data.trackInventory) return;          // skip untracked products
+          if (!data.trackInventory) return;
           const item        = order.items[i];
-          const newStock    = Math.max(0, (data.stock         ?? 0) - item.quantity);
+          const before      = data.stock ?? 0;
+          const newStock    = Math.max(0, before - item.quantity);
           const newReserved = Math.max(0, (data.reservedStock ?? 0) - item.quantity);
+          stockChanges.push({ productId: item.productId, before, after: newStock, qty: item.quantity });
           t.update(productRefs[i], {
             stock:         newStock,
             reservedStock: newReserved,
-            updatedAt:     new Date().toISOString(),
+            updatedAt:     now,
           });
         });
 
         t.update(orderRef, {
-          status:      "packed",
-          packedAt:    new Date().toISOString(),
-          packedBy:    user?.uid,
+          status:       "packed",
+          packedAt:     now,
+          packedBy:     user?.uid,
           packedByName: user?.name,
         });
       });
+
+      // Write stock movement ledger entries after transaction succeeds
+      const now = new Date().toISOString();
+      const invoiceRef = order.invoiceNumber || order.id!.slice(0, 8).toUpperCase();
+      await Promise.all(
+        stockChanges.map((c) =>
+          addDoc(collection(db, "products", c.productId, "stockMovements"), {
+            type:        "sale_out",
+            direction:   "out",
+            qty:         c.qty,
+            stockBefore: c.before,
+            stockAfter:  c.after,
+            reason:      `Order packed: #${invoiceRef} — ${order.customerName}`,
+            orderId:     order.id,
+            createdBy:   user?.uid,
+            createdByName: user?.name,
+            createdAt:   now,
+          })
+        )
+      );
     } catch (err: any) {
       alert(err.message || "Failed to mark as packed. Please refresh and try again.");
     } finally {

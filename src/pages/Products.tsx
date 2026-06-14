@@ -418,7 +418,7 @@ export default function Products() {
                   <>
                   {showCatHeader && (
                     <tr key={`cat-${product.category}`}>
-                      <td colSpan={isAdmin ? 10 : 9} className="px-5 py-2 bg-orange-50 text-xs font-semibold text-orange-700 uppercase tracking-wide border-t border-orange-100">
+                      <td colSpan={isAdmin ? 10 : 9} className="px-5 py-2 bg-orange-50 text-xs text-orange-700 uppercase tracking-wide border-t border-orange-100">
                         {product.category || "Uncategorised"}
                       </td>
                     </tr>
@@ -736,7 +736,7 @@ export default function Products() {
                 {form.trackInventory && (
                   <div className="space-y-4 mt-2">
                     <Field label={`Current Stock Quantity${allowsDecimal(form) ? " (decimals supported)" : ""}`}>
-                      <input
+                      <input disabled={true}
                         type="number" min="0"
                         step={stockStep(form)}
                         value={form.stock}

@@ -15,6 +15,7 @@ import Pagination from "../components/Pagination";
 import { Customer, InvoiceType, BillingMode } from "../types";
 import { useTamilSearch } from "../utils/UseTamilSearch";
 import { TamilSearchInput } from "../components/TamilSearchInput";
+import HandoverModal from "../components/HandoverModal";
 
 const STATUS_COLORS: Record<string, string> = {
   pending:                "bg-yellow-100 text-yellow-700",
@@ -24,17 +25,21 @@ const STATUS_COLORS: Record<string, string> = {
   attempted:              "bg-orange-100 text-orange-700",
   returned_to_warehouse:  "bg-red-100 text-red-700",
   delivered:              "bg-green-100 text-green-700",
+  partially_delivered:         "bg-amber-100 text-amber-700",
+  partially_delivered_closed:  "bg-teal-100 text-teal-700",
   cancelled:              "bg-gray-100 text-gray-500",
 };
 const STATUS_LABELS: Record<string, string> = {
-  pending:               "Pending",
-  packed:                "Packed",
-  assigned:              "Assigned",
-  out_for_delivery:      "Out for Delivery",
-  attempted:             "Attempted",
-  returned_to_warehouse: "Returned to Warehouse",
-  delivered:             "Delivered",
-  cancelled:             "Cancelled",
+  pending:                     "Pending",
+  packed:                      "Packed",
+  assigned:                    "Assigned",
+  out_for_delivery:            "Out for Delivery",
+  attempted:                   "Attempted",
+  returned_to_warehouse:       "Returned to Warehouse",
+  delivered:                   "Delivered",
+  partially_delivered:         "Partial Delivery",
+  partially_delivered_closed:  "Partial — Closed",
+  cancelled:                   "Cancelled",
 };
 
 export default function Orders() {
@@ -50,12 +55,13 @@ export default function Orders() {
   const [returnOrder, setReturnOrder]     = useState<Order | null>(null);
   const [receiveBackOrder, setReceiveBackOrder] = useState<Order | null>(null);
   const [reassignOrder, setReassignOrder] = useState<Order | null>(null);
+  const [handoverOrder, setHandoverOrder] = useState<Order | null>(null);
   const [smartRegionMatch, setSmartRegionMatch] = useState(true);
   const { user } = useAuthStore();
   const navigate = useNavigate();
 
   // ── Filter state ─────────────────────────────────────────────
-  const [activeTab, setActiveTab]   = useState<"all"|"pending"|"packed"|"assigned"|"out_for_delivery"|"attempted"|"returned_to_warehouse"|"delivered"|"cancelled">("all");
+  const [activeTab, setActiveTab]   = useState<"all"|"pending"|"packed"|"assigned"|"out_for_delivery"|"attempted"|"returned_to_warehouse"|"delivered"|"partially_delivered"|"cancelled">("all");
   const [filterAgent, setFilterAgent] = useState("");
   const [filterRegion, setFilterRegion] = useState("");
   const [filterDelivery, setFilterDelivery] = useState("");
@@ -152,17 +158,40 @@ export default function Orders() {
   };
 
   const markPacked = async (orderId: string) => {
-    // FIX (MEDIUM): Use a transaction so we verify status is still "pending"
-    // before writing — prevents double-packing on stale UI / race conditions.
+    const order = orders.find((o) => o.id === orderId);
+    if (!order) return;
     try {
       await runTransaction(db, async (t) => {
-        const snap = await t.get(doc(db, "orders", orderId));
-        if (!snap.exists()) throw new Error("Order not found.");
-        if (snap.data().status !== "pending") throw new Error("Order is no longer pending.");
-        t.update(doc(db, "orders", orderId), {
-          status: "packed",
-          packedAt: new Date().toISOString(),
-          packedBy: user?.uid,
+        // ── READ PHASE ────────────────────────────────────────────
+        const orderRef  = doc(db, "orders", orderId);
+        const orderSnap = await t.get(orderRef);
+        if (!orderSnap.exists())                   throw new Error("Order not found.");
+        if (orderSnap.data().status !== "pending") throw new Error("Order is no longer pending.");
+
+        // Read all tracked products
+        const productRefs  = order.items.map((item) => doc(db, "products", item.productId));
+        const productSnaps = await Promise.all(productRefs.map((ref) => t.get(ref)));
+
+        // ── WRITE PHASE ───────────────────────────────────────────
+        // Deduct actual stock AND clear reservation — same as PackingStation
+        productSnaps.forEach((snap, i) => {
+          if (!snap.exists()) return;
+          const data = snap.data();
+          if (!data.trackInventory) return;
+          const item        = order.items[i];
+          const newStock    = Math.max(0, (data.stock         ?? 0) - item.quantity);
+          const newReserved = Math.max(0, (data.reservedStock ?? 0) - item.quantity);
+          t.update(productRefs[i], {
+            stock:         newStock,
+            reservedStock: newReserved,
+            updatedAt:     new Date().toISOString(),
+          });
+        });
+
+        t.update(orderRef, {
+          status:      "packed",
+          packedAt:    new Date().toISOString(),
+          packedBy:    user?.uid,
           packedByName: user?.name,
         });
       });
@@ -231,6 +260,7 @@ export default function Orders() {
     attempted:              orders.filter((o) => o.status === "attempted").length,
     returned_to_warehouse:  orders.filter((o) => o.status === "returned_to_warehouse").length,
     delivered:              orders.filter((o) => o.status === "delivered").length,
+    partially_delivered:    orders.filter((o) => o.status === "partially_delivered").length,
     cancelled:              orders.filter((o) => o.status === "cancelled").length,
   };
 
@@ -336,7 +366,7 @@ export default function Orders() {
       </div>
 
       <div className="flex gap-1 mb-4 overflow-x-auto pb-1 -mx-3 px-3 md:mx-0 md:px-0">
-        {(["all","pending","packed","assigned","out_for_delivery","attempted","returned_to_warehouse","delivered","cancelled"] as const).map((tab) => (
+        {(["all","pending","packed","assigned","out_for_delivery","attempted","returned_to_warehouse","delivered","partially_delivered","cancelled"] as const).map((tab) => (
           <button key={tab} onClick={() => setActiveTab(tab)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
               activeTab === tab
@@ -462,6 +492,60 @@ export default function Orders() {
           </div>
         </div>
       )}
+
+      {/* ── Pending Handover Panel ─────────────────────────────── */}
+      {(() => {
+        const pendingHandovers = orders.filter(
+          (o) => o.status === "partially_delivered" && o.handoverStatus === "pending_handover"
+        );
+        if (pendingHandovers.length === 0) return null;
+        return (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-xl">⚠️</span>
+              <div>
+                <h3 className="font-semibold text-amber-800">Pending Handovers ({pendingHandovers.length})</h3>
+                <p className="text-xs text-amber-600">These delivery agents need to return goods + cash today.</p>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {pendingHandovers.map((o) => {
+                const returnedItems = (o.deliveredItems ?? []).filter(
+                  (item) => item.deliveredQty < item.orderedQty
+                );
+                const partialAmt = o.partialBilledAmount ?? o.totalAmount;
+                return (
+                  <div key={o.id} className="bg-white rounded-lg border border-amber-200 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="font-medium text-gray-800 text-sm">
+                        #{o.invoiceNumber || (o.id ?? "").slice(0, 8).toUpperCase()} — {o.customerName}
+                      </p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        Agent: <span className="font-medium">{o.deliveryPersonName || "—"}</span>
+                        &nbsp;·&nbsp;Billed: <span className="font-medium text-orange-600">₹{partialAmt.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
+                        &nbsp;·&nbsp;Collected: <span className="font-medium text-green-600">₹{(o.amountCollected ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
+                      </p>
+                      {returnedItems.length > 0 && (
+                        <p className="text-xs text-amber-700 mt-0.5">
+                          Return: {returnedItems.map((item) =>
+                            `${(item.orderedQty - item.deliveredQty).toFixed(2)} ${item.unit} ${item.productName}`
+                          ).join(" · ")}
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => setHandoverOrder(o)}
+                      className="bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold px-4 py-2 rounded-lg"
+                    >
+                      Record Handover
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="bg-white rounded-xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
@@ -637,6 +721,14 @@ export default function Orders() {
           onClose={() => setReassignOrder(null)}
           onDone={() => setReassignOrder(null)}
           smartRegionMatch={smartRegionMatch}
+        />
+      )}
+
+      {handoverOrder && (
+        <HandoverModal
+          order={handoverOrder}
+          onClose={() => setHandoverOrder(null)}
+          onDone={() => setHandoverOrder(null)}
         />
       )}
 
@@ -1369,24 +1461,42 @@ export function OrderDetailPanel({
     other:                "📋 Other",
   };
 
+  const isPartial = order.status === "partially_delivered" || order.status === "partially_delivered_closed";
+  const isDelivered = order.status === "delivered" || isPartial;
+
   const timeline: { label: string; time?: string; done: boolean; color: string }[] = [
-    { label: "Order Placed",          time: fmt(order.createdAt),                done: true,                                                                  color: order.status === "cancelled" ? "bg-red-400" : "bg-yellow-400" },
-    { label: "Packed",                time: fmt(order.packedAt),                 done: !!order.packedAt,                                                      color: "bg-blue-400"   },
-    { label: "Assigned to Agent",     time: fmt(order.assignedAt),               done: !!order.assignedAt,                                                    color: "bg-indigo-400" },
-    { label: "Out for Delivery",      time: fmt((order as any).outForDeliveryAt), done: ["out_for_delivery","attempted","returned_to_warehouse","delivered"].includes(order.status), color: "bg-purple-400" },
+    { label: "Order Placed",      time: fmt(order.createdAt),                 done: true,                                                                                              color: order.status === "cancelled" ? "bg-red-400" : "bg-yellow-400" },
+    { label: "Packed",            time: fmt(order.packedAt),                  done: !!order.packedAt,                                                                                  color: "bg-blue-400"   },
+    { label: "Assigned to Agent", time: fmt(order.assignedAt),                done: !!order.assignedAt,                                                                                color: "bg-indigo-400" },
+    { label: "Out for Delivery",  time: fmt((order as any).outForDeliveryAt), done: ["out_for_delivery","attempted","returned_to_warehouse","delivered","partially_delivered","partially_delivered_closed"].includes(order.status), color: "bg-purple-400" },
     ...(attempts && attempts.length > 0 ? [{
       label: `Attempted (${attempts.length}x)`,
-      time: fmt(attempts[attempts.length - 1].attemptedAt),
-      done: true,
+      time:  fmt(attempts[attempts.length - 1].attemptedAt),
+      done:  true,
       color: "bg-orange-400",
     }] : []),
     ...((order as any).returnedToWarehouseAt ? [{
       label: "Returned to Warehouse",
-      time: fmt((order as any).returnedToWarehouseAt),
-      done: true,
+      time:  fmt((order as any).returnedToWarehouseAt),
+      done:  true,
       color: "bg-red-400",
     }] : []),
-    { label: "Delivered",             time: fmt(order.deliveredAt),              done: order.status === "delivered",                                          color: "bg-green-400"  },
+    // Partial delivery — show instead of (or alongside) full delivery
+    ...(isPartial ? [{
+      label: order.status === "partially_delivered_closed" ? "Partial Delivery — Closed" : "Partial Delivery",
+      time:  fmt(order.deliveredAt),
+      done:  true,
+      color: "bg-amber-400",
+    }] : [
+      { label: "Delivered", time: fmt(order.deliveredAt), done: order.status === "delivered", color: "bg-green-400" },
+    ]),
+    // Handover step — only shown for partial deliveries
+    ...(isPartial ? [{
+      label: order.handoverStatus === "handed_over" ? "Handover Complete" : "Pending Handover",
+      time:  order.handoverAt ? fmt(order.handoverAt) : undefined,
+      done:  order.handoverStatus === "handed_over",
+      color: order.handoverStatus === "handed_over" ? "bg-teal-400" : "bg-gray-300",
+    }] : []),
   ];
 
   const balance =

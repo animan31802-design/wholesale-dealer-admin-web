@@ -163,6 +163,17 @@ export default function ProcessingStation() {
     return { totalExpected, totalActual, yieldPct, waste };
   }, [completeModal, actualOutputs]);
 
+  const hasInsufficientStock = useMemo(() => {
+    if (!selectedRecipe) return false;
+    const bc = parseFloat(batchCount) || 1;
+    return selectedRecipe.inputs.some(i => {
+      const actual = actualInputs[i.productId] || "";
+      const prod = products.find(p => p.id === i.productId);
+      const sufficient = prod && prod.stock >= (parseFloat(actual) || 0);
+      return !sufficient && parseFloat(actual) > 0;
+    });
+  }, [selectedRecipe, batchCount, products, actualInputs]);
+
   // ── STAGE 1: Start Processing ─────────────────────────────────────────────
   const handleStart = async () => {
     if (!selectedRecipe || !user) return;
@@ -180,24 +191,25 @@ export default function ProcessingStation() {
       }));
       const now = new Date().toISOString();
 
-      // Transaction: reduce raw material stocks
+      // Transaction: reduce raw material stocks + capture before/after for ledger
+      const inputStockChanges: { productId: string; before: number; after: number; qty: number }[] = [];
       await runTransaction(db, async t => {
         const refs  = sessionInputs.map(i => doc(db, "products", i.productId));
         const snaps = await Promise.all(refs.map(r => t.get(r)));
         sessionInputs.forEach((inp, idx) => {
-          const cur = snaps[idx].data()?.stock || 0;
-          t.update(refs[idx], {
-            stock: parseFloat(Math.max(0, cur - inp.actualQty).toFixed(4)),
-            updatedAt: now,
-          });
+          const before = snaps[idx].data()?.stock ?? 0;
+          const after  = parseFloat(Math.max(0, before - inp.actualQty).toFixed(4));
+          inputStockChanges.push({ productId: inp.productId, before, after, qty: inp.actualQty });
+          t.update(refs[idx], { stock: after, updatedAt: now });
         });
       });
 
-      // Write stock movements for inputs
-      await Promise.all(sessionInputs.map(i =>
+      // Write stock movements for inputs with correct before/after values
+      await Promise.all(sessionInputs.map((i, idx) =>
         addDoc(collection(db, "products", i.productId, "stockMovements"), {
           type: "processing_out", direction: "out", qty: i.actualQty,
-          stockBefore: 0, stockAfter: 0,
+          stockBefore: inputStockChanges[idx].before,
+          stockAfter:  inputStockChanges[idx].after,
           reason: `Processing started: ${selectedRecipe.name} (${bc} batch${bc > 1 ? "es" : ""})`,
           createdBy: user.uid, createdByName: user.name, createdAt: now,
         })
@@ -234,25 +246,26 @@ export default function ProcessingStation() {
         actualQty: parseFloat(actualOutputs[o.productId] || "0") || 0,
       }));
       const yieldPct = yieldPreview?.yieldPct ?? 0;
-
-      // Transaction: increase finished product stocks
+      
+      // Transaction: increase finished product stocks + capture before/after for ledger
+      const outputStockChanges: { productId: string; before: number; after: number }[] = [];
       await runTransaction(db, async t => {
         const refs  = finalOutputs.map(o => doc(db, "products", o.productId));
         const snaps = await Promise.all(refs.map(r => t.get(r)));
         finalOutputs.forEach((out, idx) => {
-          const cur = snaps[idx].data()?.stock || 0;
-          t.update(refs[idx], {
-            stock: parseFloat((cur + out.actualQty).toFixed(4)),
-            updatedAt: now,
-          });
+          const before = snaps[idx].data()?.stock ?? 0;
+          const after  = parseFloat((before + out.actualQty).toFixed(4));
+          outputStockChanges.push({ productId: out.productId, before, after });
+          t.update(refs[idx], { stock: after, updatedAt: now });
         });
       });
 
-      // Write stock movements for outputs
-      await Promise.all(finalOutputs.map(o =>
+      // Write stock movements for outputs with correct before/after values
+      await Promise.all(finalOutputs.map((o, idx) =>
         addDoc(collection(db, "products", o.productId, "stockMovements"), {
           type: "processing_in", direction: "in", qty: o.actualQty,
-          stockBefore: 0, stockAfter: 0,
+          stockBefore: outputStockChanges[idx].before,
+          stockAfter:  outputStockChanges[idx].after,
           reason: `Processing completed: ${completeModal.recipeName} (${completeModal.batchCount} batch${completeModal.batchCount > 1 ? "es" : ""})`,
           createdBy: user.uid, createdByName: user.name, createdAt: now,
         })
@@ -555,9 +568,12 @@ export default function ProcessingStation() {
                 </div>
               </div>
 
-              <div className="flex justify-end">
-                <button onClick={handleStart} disabled={starting}
-                  className="bg-orange-500 text-white px-8 py-3 rounded-xl text-sm font-bold hover:bg-orange-600 disabled:opacity-50 shadow-sm">
+              <div className="flex flex-col items-end gap-2">
+                {hasInsufficientStock && (
+                  <p className="text-xs text-red-500 font-medium">⚠️ Insufficient stock for one or more inputs. Reduce quantities or batch count.</p>
+                )}
+                <button onClick={handleStart} disabled={starting || hasInsufficientStock}
+                  className="bg-orange-500 text-white px-8 py-3 rounded-xl text-sm font-bold hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
                   {starting ? "Starting…" : "▶️ Start Processing & Deduct Raw Materials"}
                 </button>
               </div>
