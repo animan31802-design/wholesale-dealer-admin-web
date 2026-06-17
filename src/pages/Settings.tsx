@@ -3,6 +3,7 @@ import { doc, getDoc, setDoc } from "firebase/firestore";
 import { WorkCalendar, DEFAULT_CALENDAR } from "./StaffAttendance";
 import { db } from "../firebase/config";
 import QRCode from "qrcode";
+import { ChargeDiscountType } from "../types";
 
 export interface BusinessSettings {
   businessName: string;
@@ -25,6 +26,7 @@ export interface BusinessSettings {
   defaultBillingMode: "with_due" | "without_due";
   defaultQrMode: "with_amount" | "without_amount";
   defaultPaperSize: "a4" | "a5";
+  chargeDiscountTypes?: ChargeDiscountType[];
 }
 
 const EMPTY: BusinessSettings = {
@@ -35,6 +37,7 @@ const EMPTY: BusinessSettings = {
   invoiceFooter: "Thank you for your business!",
   defaultInvoiceType: "estimate", defaultBillingMode: "without_due",
   defaultQrMode: "without_amount", defaultPaperSize: "a4",
+  chargeDiscountTypes: [],
 };
 
 export async function getBusinessSettings(): Promise<BusinessSettings> {
@@ -73,7 +76,7 @@ export default function Settings() {
       getBusinessSettings(),
       getDoc(doc(db, "settings", "workCalendar")),
     ]).then(([data, calSnap]) => {
-      setForm(data);
+      setForm({ ...data, chargeDiscountTypes: data.chargeDiscountTypes ?? [] });
       if (calSnap.exists()) setCalendar(calSnap.data() as WorkCalendar);
       setLoading(false);
       if (data.upiId) generateQRs(data.upiId);
@@ -83,9 +86,43 @@ export default function Settings() {
   const set = (key: keyof BusinessSettings, value: string) =>
     setForm(f => ({ ...f, [key]: value }));
 
+  // ── Charges & Discounts management ────────────────────────────────────────
+  const cdTypes = form.chargeDiscountTypes ?? [];
+
+  const addChargeDiscountType = () => {
+    const id = `cd_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    setForm(f => ({
+      ...f,
+      chargeDiscountTypes: [
+        ...(f.chargeDiscountTypes ?? []),
+        { id, name: "", kind: "charge", mode: "flat", defaultValue: 0, active: true },
+      ],
+    }));
+  };
+
+  const updateChargeDiscountType = (id: string, patch: Partial<ChargeDiscountType>) => {
+    setForm(f => ({
+      ...f,
+      chargeDiscountTypes: (f.chargeDiscountTypes ?? []).map(c =>
+        c.id === id ? { ...c, ...patch } : c
+      ),
+    }));
+  };
+
+  const removeChargeDiscountType = (id: string) => {
+    setForm(f => ({
+      ...f,
+      chargeDiscountTypes: (f.chargeDiscountTypes ?? []).filter(c => c.id !== id),
+    }));
+  };
+
   const handleSave = async () => {
     if (!form.businessName.trim()) { alert("Business name is required."); return; }
     if (!form.defaultInvoiceType) { alert("Please select a Default Invoice Type."); return; }
+    if ((form.chargeDiscountTypes ?? []).some(c => !c.name.trim())) {
+      alert("Every Charge/Discount must have a name (or delete the empty row).");
+      return;
+    }
     setSaving(true); setSaved(false);
     try {
       await setDoc(doc(db, "settings", "business"), form);
@@ -312,6 +349,64 @@ export default function Settings() {
                 placeholder="Thank you for your business!" maxLength={100} className={inp} />
             </Field>
           </div>
+        </Section>
+
+        {/* ── Charges & Discounts ───────────────────────────────────────── */}
+        <Section title="Charges & Discounts">
+          <p className="text-xs text-gray-400 mb-4">
+            Define named charges (e.g. Loading Charge, Transport Fee) or discounts (e.g. Festival Discount) that
+            packing staff or admin can apply to an invoice while generating it. Only <strong>active</strong> items
+            show up in the invoice generation screen.
+          </p>
+
+          {cdTypes.length === 0 ? (
+            <p className="text-sm text-gray-400 italic mb-4">No charges or discounts configured yet.</p>
+          ) : (
+            <div className="space-y-3 mb-4">
+              {cdTypes.map((cd) => (
+                <div key={cd.id} className="border border-gray-200 rounded-xl p-3 flex flex-wrap items-end gap-3">
+                  <Field label="Name">
+                    <input value={cd.name} onChange={e => updateChargeDiscountType(cd.id, { name: e.target.value })}
+                      placeholder="e.g. Loading Charge" className={inp + " w-44"} />
+                  </Field>
+                  <Field label="Type">
+                    <select value={cd.kind} onChange={e => updateChargeDiscountType(cd.id, { kind: e.target.value as any })}
+                      className={inp + " w-32"}>
+                      <option value="charge">Charge (+)</option>
+                      <option value="discount">Discount (−)</option>
+                    </select>
+                  </Field>
+                  <Field label="Mode">
+                    <select value={cd.mode} onChange={e => updateChargeDiscountType(cd.id, { mode: e.target.value as any })}
+                      className={inp + " w-28"}>
+                      <option value="flat">Flat ₹</option>
+                      <option value="percentage">% of bill</option>
+                    </select>
+                  </Field>
+                  <Field label={cd.mode === "percentage" ? "Default %" : "Default ₹"}>
+                    <input type="number" min="0" step="0.01" value={cd.defaultValue ?? 0}
+                      onChange={e => updateChargeDiscountType(cd.id, { defaultValue: parseFloat(e.target.value) || 0 })}
+                      className={inp + " w-24"} />
+                  </Field>
+                  <label className="flex items-center gap-2 text-sm text-gray-600 pb-2.5">
+                    <input type="checkbox" checked={cd.active}
+                      onChange={e => updateChargeDiscountType(cd.id, { active: e.target.checked })}
+                      className="rounded border-gray-300" />
+                    Active
+                  </label>
+                  <button type="button" onClick={() => removeChargeDiscountType(cd.id)}
+                    className="text-red-400 hover:text-red-600 text-sm font-medium pb-2.5 ml-auto">
+                    Delete
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button type="button" onClick={addChargeDiscountType}
+            className="bg-orange-50 text-orange-700 border border-orange-200 px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-100">
+            + Add Charge / Discount
+          </button>
         </Section>
 
         {/* Invoice Header Preview */}

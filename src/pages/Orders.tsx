@@ -12,7 +12,7 @@ import { useModalKeyboard } from "../hooks/useModalKeyboard";
 const fmtQ = (n: number) => parseFloat(n.toFixed(4)).toString();
 import { buildInvoicePDF } from "../utils/invoice";
 import Pagination from "../components/Pagination";
-import { Customer, InvoiceType, BillingMode } from "../types";
+import { Customer, InvoiceType, BillingMode, ChargeDiscountType, AppliedChargeDiscount } from "../types";
 import { useTamilSearch } from "../utils/UseTamilSearch";
 import { TamilSearchInput } from "../components/TamilSearchInput";
 import HandoverModal from "../components/HandoverModal";
@@ -797,6 +797,17 @@ function InvoiceModal({ order, onClose, isAdmin }: {
   const [customerDue, setCustomerDue] = useState("");
   const [loadingDefaults, setLoadingDefaults] = useState(!hasInvoice); // only wait on first-time generation
 
+  // Charges & Discounts — admin-configured types loaded from settings, and the
+  // subset the user has actually chosen to apply on this invoice (with values).
+  const [chargeDiscountTypes, setChargeDiscountTypes] = useState<ChargeDiscountType[]>([]);
+  const [selectedCharges, setSelectedCharges] = useState<Record<string, AppliedChargeDiscount>>(
+    () => {
+      const initial: Record<string, AppliedChargeDiscount> = {};
+      (order.appliedCharges ?? []).forEach((cd) => { initial[cd.id] = cd; });
+      return initial;
+    }
+  );
+
   // Working invoice number — locked once minted, never changes except on regen
   const [invoiceNumber, setInvoiceNumber] = useState<string>(order.invoiceNumber || "");
 
@@ -806,6 +817,38 @@ function InvoiceModal({ order, onClose, isAdmin }: {
   const [loadingDue, setLoadingDue]     = useState(false);
   const [generating, setGenerating]     = useState(false);
   const [regenReason, setRegenReason]   = useState("");
+
+  // Flattened, order-stable list of charges/discounts the user has switched on.
+  // `.amount` here is the raw entered value for flat mode, or left as the % for
+  // percentage mode — buildInvoicePDF resolves percentage against totalPayable.
+  const selectedChargesArray: AppliedChargeDiscount[] = chargeDiscountTypes
+    .filter((t) => selectedCharges[t.id])
+    .map((t) => {
+      const sel = selectedCharges[t.id];
+      return {
+        id: t.id, name: t.name, kind: t.kind, mode: t.mode,
+        value: sel.value, amount: sel.value,
+      };
+    });
+
+  const toggleCharge = (type: ChargeDiscountType) => {
+    setSelectedCharges((prev) => {
+      const next = { ...prev };
+      if (next[type.id]) {
+        delete next[type.id];
+      } else {
+        next[type.id] = {
+          id: type.id, name: type.name, kind: type.kind, mode: type.mode,
+          value: type.defaultValue ?? 0, amount: type.defaultValue ?? 0,
+        };
+      }
+      return next;
+    });
+  };
+
+  const updateChargeValue = (id: string, value: number) => {
+    setSelectedCharges((prev) => prev[id] ? { ...prev, [id]: { ...prev[id], value, amount: value } } : prev);
+  };
 
   // Load customer data once
   useEffect(() => {
@@ -838,6 +881,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
         }
         setQrMode(biz.defaultQrMode ?? "without_amount");
         setPaperSize((biz as any).defaultPaperSize ?? "a4");
+        setChargeDiscountTypes((biz as any).chargeDiscountTypes ?? []);
       }
       setLoadingDefaults(false);
     }).catch(() => setLoadingDefaults(false));
@@ -852,7 +896,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
   useEffect(() => {
     if (modalState === "view" && !pdfUrl && !generating && !loadingDue) {
       const t = setTimeout(() => {
-        renderPdf(order.invoiceNumber!, order.invoiceType ?? "estimate", order.billingMode ?? "without_due", qrMode, undefined, customerData);
+        renderPdf(order.invoiceNumber!, order.invoiceType ?? "estimate", order.billingMode ?? "without_due", qrMode, undefined, customerData, order.appliedCharges ?? []);
       }, 50);
       return () => clearTimeout(t);
     }
@@ -866,17 +910,20 @@ function InvoiceModal({ order, onClose, isAdmin }: {
     qrModeVal: "with_amount" | "without_amount" = qrMode,
     paperSizeOverride?: "a4" | "a5",
     customerOverride?: any,
+    appliedChargesOverride?: AppliedChargeDiscount[],
   ) => {
     setGenerating(true);
     if (pdfUrl) URL.revokeObjectURL(pdfUrl);
     const custData = customerOverride !== undefined ? customerOverride : customerData;
+    const charges  = appliedChargesOverride !== undefined ? appliedChargesOverride : selectedChargesArray;
     try {
-      const orderWithMeta = { ...order, invoiceNumber: invNum, invoiceType: invType, billingMode: billMode };
+      const orderWithMeta = { ...order, invoiceNumber: invNum, invoiceType: invType, billingMode: billMode, appliedCharges: charges };
       const { pdf, html } = await buildInvoicePDF(orderWithMeta as any, custData || undefined, {
         invoiceType: invType,
         billingMode: billMode,
         customerDue: billMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
         qrMode: qrModeVal,
+        appliedCharges: charges,
       }, paperSizeOverride ?? paperSize);
       setInvoiceHtml(html);
       setPdfUrl(URL.createObjectURL(pdf.output("blob")));
@@ -899,18 +946,22 @@ function InvoiceModal({ order, onClose, isAdmin }: {
       const { mintInvoiceNumber } = await import("../utils/invoice");
       const minted = await mintInvoiceNumber(prefix);
 
-      // 3. Persist everything to the order doc BEFORE rendering
+      // 3. Persist everything to the order doc BEFORE rendering.
+      // appliedCharges is saved as-entered; buildInvoicePDF resolves percentage
+      // values to a frozen ₹ amount at render time, so re-viewing this invoice
+      // later (via "view" state) reproduces the exact same figures.
       await updateDoc(doc(db, "orders", order.id!), {
         invoiceNumber: minted,
         invoiceType,
         billingMode,
         invoicedAt: new Date().toISOString(),
+        appliedCharges: selectedChargesArray,
       });
 
       setInvoiceNumber(minted);
 
       // 4. Render PDF with the locked number
-      await renderPdf(minted, invoiceType, billingMode, qrMode);
+      await renderPdf(minted, invoiceType, billingMode, qrMode, undefined, undefined, selectedChargesArray);
     } catch (e: any) {
       alert("Failed to generate invoice: " + e.message);
       setGenerating(false);
@@ -947,11 +998,12 @@ function InvoiceModal({ order, onClose, isAdmin }: {
         billingMode,
         invoicedAt:      new Date().toISOString(),
         voidedInvoices:  [...existingVoided, voidedEntry],
+        appliedCharges:  selectedChargesArray,
       });
 
       setInvoiceNumber(minted);
       setRegenReason("");
-      await renderPdf(minted, invoiceType, billingMode, qrMode);
+      await renderPdf(minted, invoiceType, billingMode, qrMode, undefined, undefined, selectedChargesArray);
     } catch (e: any) {
       alert("Failed to regenerate invoice: " + e.message);
       setGenerating(false);
@@ -960,12 +1012,13 @@ function InvoiceModal({ order, onClose, isAdmin }: {
 
   const handleDownload = async () => {
     const prefix = invoiceType === "gst" ? "invoice" : "estimate";
-    const orderWithMeta = { ...order, invoiceNumber, invoiceType, billingMode };
+    const orderWithMeta = { ...order, invoiceNumber, invoiceType, billingMode, appliedCharges: selectedChargesArray };
     const { pdf } = await buildInvoicePDF(orderWithMeta as any, customerData || undefined, {
       invoiceType,
       billingMode,
       customerDue: billingMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
       qrMode,
+      appliedCharges: selectedChargesArray,
     }, paperSize);
     pdf.save(`${prefix}-${invoiceNumber}.pdf`);
   };
@@ -973,12 +1026,13 @@ function InvoiceModal({ order, onClose, isAdmin }: {
   const handleShare = async () => {
     try {
       const prefix = invoiceType === "gst" ? "invoice" : "estimate";
-      const orderWithMeta = { ...order, invoiceNumber, invoiceType, billingMode };
+      const orderWithMeta = { ...order, invoiceNumber, invoiceType, billingMode, appliedCharges: selectedChargesArray };
       const { pdf } = await buildInvoicePDF(orderWithMeta as any, customerData || undefined, {
         invoiceType,
         billingMode,
         customerDue: billingMode === "with_due" ? parseFloat(customerDue) || 0 : 0,
         qrMode,
+        appliedCharges: selectedChargesArray,
       }, paperSize);
       const blob = pdf.output("blob");
       const file = new File([blob], `${prefix}-${invoiceNumber}.pdf`, { type: "application/pdf" });
@@ -1113,6 +1167,14 @@ function InvoiceModal({ order, onClose, isAdmin }: {
                 </div>
               </div>
 
+              {/* Charges & Discounts */}
+              <ChargesDiscountsPicker
+                chargeDiscountTypes={chargeDiscountTypes}
+                selectedCharges={selectedCharges}
+                onToggle={toggleCharge}
+                onValueChange={updateChargeValue}
+              />
+
               <div className="flex gap-3 pt-1">
                 <button onClick={onClose}
                   className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm hover:bg-gray-50">
@@ -1207,6 +1269,14 @@ function InvoiceModal({ order, onClose, isAdmin }: {
                   ))}
                 </div>
               </div>
+
+              {/* Charges & Discounts */}
+              <ChargesDiscountsPicker
+                chargeDiscountTypes={chargeDiscountTypes}
+                selectedCharges={selectedCharges}
+                onToggle={toggleCharge}
+                onValueChange={updateChargeValue}
+              />
 
               {/* Reason */}
               <div>
@@ -1305,6 +1375,69 @@ function InvoiceModal({ order, onClose, isAdmin }: {
             </div>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── Charges & Discounts picker (used in both setup and regenerate screens) ──
+function ChargesDiscountsPicker({
+  chargeDiscountTypes,
+  selectedCharges,
+  onToggle,
+  onValueChange,
+}: {
+  chargeDiscountTypes: ChargeDiscountType[];
+  selectedCharges: Record<string, AppliedChargeDiscount>;
+  onToggle: (type: ChargeDiscountType) => void;
+  onValueChange: (id: string, value: number) => void;
+}) {
+  const activeTypes = chargeDiscountTypes.filter((t) => t.active);
+  if (activeTypes.length === 0) return null;
+
+  const charges = activeTypes.filter((t) => t.kind === "charge");
+  const discounts = activeTypes.filter((t) => t.kind === "discount");
+
+  const renderRow = (type: ChargeDiscountType) => {
+    const sel = selectedCharges[type.id];
+    const isSelected = !!sel;
+    return (
+      <div key={type.id} className={`rounded-xl border-2 transition-all ${
+        isSelected ? (type.kind === "discount" ? "border-green-400 bg-green-50" : "border-orange-400 bg-orange-50") : "border-gray-200"
+      }`}>
+        <button type="button" onClick={() => onToggle(type)}
+          className="w-full flex items-center justify-between px-3 py-2.5 text-left">
+          <span className="flex items-center gap-2">
+            <span className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] ${
+              isSelected ? (type.kind === "discount" ? "bg-green-500 border-green-500 text-white" : "bg-orange-500 border-orange-500 text-white") : "border-gray-300"
+            }`}>
+              {isSelected ? "✓" : ""}
+            </span>
+            <span className="font-medium text-sm text-gray-700">{type.name}</span>
+          </span>
+          <span className="text-xs text-gray-400">{type.mode === "percentage" ? "%" : "₹ flat"}</span>
+        </button>
+        {isSelected && (
+          <div className="px-3 pb-3 flex items-center gap-2">
+            <input
+              type="number" min="0" step="0.01"
+              value={sel.value}
+              onChange={(e) => onValueChange(type.id, parseFloat(e.target.value) || 0)}
+              className="w-28 border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+            />
+            <span className="text-xs text-gray-400">{type.mode === "percentage" ? "% of bill" : "₹"}</span>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <label className="block text-sm font-semibold text-gray-700 mb-2">Charges & Discounts (optional)</label>
+      <div className="space-y-2">
+        {charges.map(renderRow)}
+        {discounts.map(renderRow)}
       </div>
     </div>
   );

@@ -3,7 +3,7 @@ import html2canvas from "html2canvas";
 import QRCode from "qrcode";
 import { doc, getDoc, runTransaction, collection, getDocs } from "firebase/firestore";
 import { db } from "../firebase/config";
-import { Order, Customer, InvoiceType, BillingMode, OrderItem, Product } from "../types";
+import { Order, Customer, InvoiceType, BillingMode, OrderItem, Product, AppliedChargeDiscount } from "../types";
 import { BusinessSettings } from "../pages/Settings";
 import { NOTO_TAMIL_REGULAR_B64, NOTO_TAMIL_BOLD_B64 } from "./invoiceFonts";
 
@@ -14,6 +14,7 @@ export interface InvoiceOptions {
   billingMode: BillingMode;
   customerDue?: number;
   qrMode?: "with_amount" | "without_amount";
+  appliedCharges?: AppliedChargeDiscount[];
 }
 
 // ─── Firestore helpers ────────────────────────────────────────────────────────
@@ -102,6 +103,17 @@ function esc(text: unknown): string {
 
 function round2(n: number): number { return Math.round(n * 100) / 100; }
 function round3(n: number): number { return Math.round(n * 1000) / 1000; }
+
+// Net ₹ effect of all applied charges/discounts: charges add, discounts subtract.
+// Each item's `.amount` is already resolved to a ₹ value at generation time
+// (percentage items were already resolved against totalPayable before this point).
+function netChargesDiscounts(applied: AppliedChargeDiscount[] | undefined): number {
+  if (!applied || applied.length === 0) return 0;
+  return round2(applied.reduce((sum, c) => {
+    const signed = c.kind === "discount" ? -Math.abs(c.amount) : Math.abs(c.amount);
+    return sum + signed;
+  }, 0));
+}
 
 function truncate(text: string, maxChars: number): string {
   if (!text) return "";
@@ -343,8 +355,9 @@ function buildInvoiceHTML(params: {
   qrDataUrl?: string;
   paperSize?: "a4" | "a5";
   suppressSummary?: boolean;  // true on page 1 when there are continuation pages
+  appliedCharges?: AppliedChargeDiscount[];
 }): string {
-  const { order, customer, biz, invoiceNumber, isGST, showDue, historicalDue, advancePaid, qrDataUrl, paperSize = "a4", suppressSummary = false } = params;
+  const { order, customer, biz, invoiceNumber, isGST, showDue, historicalDue, advancePaid, qrDataUrl, paperSize = "a4", suppressSummary = false, appliedCharges } = params;
 
   // Paper dimensions at 96dpi: A4=794px wide, A5=559px wide
   // Content area = body width minus padding (18px each side)
@@ -359,7 +372,8 @@ function buildInvoiceHTML(params: {
   const totalCGST     = round3(lineAmounts.reduce((s, a) => s + a.lineCGST,    0));
   const totalSGST     = round3(lineAmounts.reduce((s, a) => s + a.lineSGST,    0));
   const computedTotal = round2(lineAmounts.reduce((s, a) => s + a.lineTotal,   0));
-  const totalPayable  = computedTotal + (showDue ? historicalDue : 0);
+  const chargesNet    = netChargesDiscounts(appliedCharges);
+  const totalPayable  = round2(computedTotal + (showDue ? historicalDue : 0) + chargesNet);
   const balanceOnDelivery = Math.max(0, round2(totalPayable - advancePaid));
 
   const addrParts = [biz?.address, biz?.city, biz?.state, biz?.pincode].filter(Boolean).join(", ");
@@ -447,10 +461,27 @@ function buildInvoiceHTML(params: {
     </tr>`;
   };
 
-  const dueRows = showDue && historicalDue > 0 ? `
-    ${summaryRow("Previous Due", historicalDue.toFixed(2))}
-    ${summaryRow("Total Payable", (computedTotal + historicalDue).toFixed(2), true)}
-  ` : "";
+  // ── Charges & Discounts rows (only rendered if at least one is applied) ──
+  const chargeDiscountRows = (appliedCharges && appliedCharges.length > 0)
+    ? appliedCharges.map((cd) => {
+        const sign = cd.kind === "discount" ? "- " : "+ ";
+        const valueLabel = cd.mode === "percentage" ? ` (${cd.value}%)` : "";
+        return summaryRow(`${esc(cd.name)}${valueLabel}`, `${sign}${Math.abs(cd.amount).toFixed(2)}`);
+      }).join("")
+    : "";
+
+  const hasAdjustments = (showDue && historicalDue > 0) || chargesNet !== 0;
+
+  const dueRows = showDue && historicalDue > 0
+    ? summaryRow("Previous Due", historicalDue.toFixed(2))
+    : "";
+
+  // "Total Payable" only needs to show as its own bold line when there's something
+  // adjusting the bill (previous due and/or charges/discounts) — otherwise the
+  // TOTALS row above already is the payable amount.
+  const totalPayableRow = hasAdjustments
+    ? summaryRow("Total Payable", totalPayable.toFixed(2), true)
+    : "";
 
   const advanceRow = advancePaid > 0
     ? summaryRow("Advance Paid", `- ${advancePaid.toFixed(2)}`)
@@ -1042,6 +1073,8 @@ isGST
   </tr>`}
 
   ${dueRows}
+  ${chargeDiscountRows}
+  ${totalPayableRow}
   ${advanceRow}
   ${balanceRow}
 
@@ -1135,7 +1168,21 @@ export async function buildInvoicePDF(
     const { lineTotal } = computeLineAmounts(item, isGST);
     return s + lineTotal;
   }, 0));
-  const totalPayable      = computedTotal + (showDue ? historicalDue : 0);
+  const totalPayableBeforeCharges = computedTotal + (showDue ? historicalDue : 0);
+
+  // Resolve charges/discounts: percentage-mode is computed against totalPayable
+  // (line items total + previous due, if shown) at generation time and frozen
+  // into `.amount` so the printed invoice and saved order doc always agree.
+  const rawAppliedCharges = options?.appliedCharges ?? (order as any).appliedCharges ?? [];
+  const appliedCharges: AppliedChargeDiscount[] = rawAppliedCharges.map((cd: AppliedChargeDiscount) => ({
+    ...cd,
+    amount: cd.mode === "percentage"
+      ? round2(totalPayableBeforeCharges * (cd.value / 100))
+      : round2(cd.value),
+  }));
+  const chargesNet = netChargesDiscounts(appliedCharges);
+
+  const totalPayable      = round2(totalPayableBeforeCharges + chargesNet);
   const balanceOnDelivery = Math.max(0, round2(totalPayable - advancePaid));
   // QR encodes what the customer still owes. If nothing is owed (fully pre-paid), skip QR.
   const qrAmount = balanceOnDelivery;
@@ -1169,7 +1216,7 @@ export async function buildInvoicePDF(
   const html = buildInvoiceHTML({
     order: enrichedOrder, customer, biz, invoiceNumber,
     isGST, showDue, historicalDue, advancePaid, qrDataUrl,
-    paperSize,
+    paperSize, appliedCharges,
   });
 
   // ── Helper: render one HTML page to a canvas, returns dataURL ───────────────
@@ -1224,7 +1271,7 @@ export async function buildInvoicePDF(
   const probeHtml0 = buildInvoiceHTML({
     order: probeOrder0 as any, customer, biz, invoiceNumber,
     isGST, showDue, historicalDue, advancePaid, qrDataUrl,
-    paperSize,
+    paperSize, appliedCharges,
   });
 
   // Render page 1 with ONE item to measure one item row height
@@ -1232,7 +1279,7 @@ export async function buildInvoicePDF(
   const probeHtml1 = buildInvoiceHTML({
     order: probeOrder1 as any, customer, biz, invoiceNumber,
     isGST, showDue, historicalDue, advancePaid, qrDataUrl,
-    paperSize,
+    paperSize, appliedCharges,
   });
 
   // Render both probes in parallel
@@ -1298,7 +1345,7 @@ export async function buildInvoicePDF(
   const totalCGST      = round3(lineAmounts.reduce((s, a) => s + a.lineCGST,    0));
   const totalSGST      = round3(lineAmounts.reduce((s, a) => s + a.lineSGST,    0));
   const totalComputed  = round2(lineAmounts.reduce((s, a) => s + a.lineTotal,   0));
-  const totalPayable2  = totalComputed + (showDue ? historicalDue : 0);
+  const totalPayable2  = round2(totalComputed + (showDue ? historicalDue : 0) + chargesNet);
   const balance2       = Math.max(0, round2(totalPayable2 - advancePaid));
   const amountForWords2 = balance2 > 0 ? balance2 : totalPayable2;
 
@@ -1311,10 +1358,20 @@ export async function buildInvoicePDF(
       <td colspan="${VALUE_COL_SPAN}" style="${c}text-align:right;${s}">${value}</td>
     </tr>`;
   };
-  const dueRows2 = showDue && historicalDue > 0 ? `
-    ${summaryRowHtml("Previous Due", historicalDue.toFixed(2))}
-    ${summaryRowHtml("Total Payable", (totalComputed + historicalDue).toFixed(2), true)}
-  ` : "";
+  const chargeDiscountRows2 = (appliedCharges && appliedCharges.length > 0)
+    ? appliedCharges.map((cd) => {
+        const sign = cd.kind === "discount" ? "- " : "+ ";
+        const valueLabel = cd.mode === "percentage" ? ` (${cd.value}%)` : "";
+        return summaryRowHtml(`${esc(cd.name)}${valueLabel}`, `${sign}${Math.abs(cd.amount).toFixed(2)}`);
+      }).join("")
+    : "";
+  const hasAdjustments2 = (showDue && historicalDue > 0) || chargesNet !== 0;
+  const dueRows2 = showDue && historicalDue > 0
+    ? summaryRowHtml("Previous Due", historicalDue.toFixed(2))
+    : "";
+  const totalPayableRow2 = hasAdjustments2
+    ? summaryRowHtml("Total Payable", totalPayable2.toFixed(2), true)
+    : "";
   const advanceRow2 = advancePaid > 0 ? summaryRowHtml("Advance Paid", `- ${advancePaid.toFixed(2)}`) : "";
   const balanceRow2 = advancePaid > 0 ? summaryRowHtml("Balance to Pay", balance2 > 0 ? balance2.toFixed(2) : "NIL", true) : "";
 
@@ -1355,6 +1412,8 @@ export async function buildInvoicePDF(
   const summaryBlock = `
   ${lastPageTotalsRow}
   ${dueRows2}
+  ${chargeDiscountRows2}
+  ${totalPayableRow2}
   ${advanceRow2}
   ${balanceRow2}
   ${bankDetails2}
@@ -1400,6 +1459,7 @@ export async function buildInvoicePDF(
         advancePaid:   isLastPage ? advancePaid : 0,
         qrDataUrl:     isLastPage ? qrDataUrl : "",
         paperSize,
+        appliedCharges: isLastPage ? appliedCharges : undefined,
         // Override: suppress totals/summary on page 1 if not last page
         suppressSummary: !isLastPage,
       } as any);

@@ -118,6 +118,30 @@ export interface DeliveryAttempt {
 export type InvoiceType = "gst" | "estimate";
 export type BillingMode = "with_due" | "without_due";
 
+// ── Charges & Discounts (admin-configurable, applied per-invoice) ────────────
+export type ChargeDiscountKind = "charge" | "discount";
+export type ChargeDiscountMode = "flat" | "percentage";
+
+// Admin-configured type, stored in settings/business.chargeDiscountTypes[]
+export interface ChargeDiscountType {
+  id: string;               // stable id (uuid-ish), used to reference from orders
+  name: string;             // e.g. "Loading Charge", "Festival Discount"
+  kind: ChargeDiscountKind;
+  mode: ChargeDiscountMode; // flat ₹ or % of totalPayable
+  defaultValue?: number;    // pre-filled value at invoice time (₹ or %)
+  active: boolean;          // soft-disable without deleting (keeps old invoices intact)
+}
+
+// Resolved instance applied to a specific order/invoice
+export interface AppliedChargeDiscount {
+  id: string;        // ChargeDiscountType.id this was created from
+  name: string;       // snapshot of the name at the time of invoicing
+  kind: ChargeDiscountKind;
+  mode: ChargeDiscountMode;
+  value: number;      // the raw entered value (₹ if flat, % if percentage)
+  amount: number;     // resolved ₹ amount (computed at generation time, used for printing)
+}
+
 export interface Order {
   id?: string;
   orderNo?: string;          // human-readable order number (written by both apps)
@@ -149,6 +173,7 @@ export interface Order {
   invoiceType?: InvoiceType;
   invoicedAt?: string;
   billingMode?: BillingMode;
+  appliedCharges?: AppliedChargeDiscount[];  // charges/discounts applied at invoice time
   voidedInvoices?: Array<{ invoiceNumber: string; voidedAt: string; voidedBy: string; voidedByName: string }>;
   deliveryAttempts?: DeliveryAttempt[];  // history of every failed delivery attempt
   currentHolder?: "delivery_agent" | "warehouse"; // where items are RIGHT NOW
