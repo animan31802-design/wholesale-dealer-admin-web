@@ -1,10 +1,10 @@
 import {
-  collection, addDoc, getDocs, orderBy, query,
+  collection, addDoc, getDocs, orderBy, query, where,
   doc, updateDoc, runTransaction, getDoc
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { LedgerEntry } from "../types/ledger";
-import { Customer } from "../types";
+import { Customer, Order } from "../types";
 
 // ── Overdue customer result ───────────────────────────────────────
 export interface OverdueCustomer {
@@ -192,6 +192,123 @@ export async function recordManualPayment(
     createdAt: new Date().toISOString(),
   });
 }
+
+// ── Order-aware payment allocation ─────────────────────────────────
+// This is the canonical way money should be recorded against orders from
+// now on. `order.amountCollected` is the source of truth that every report
+// and the order drawer reads from — a ledger-only credit (the old behaviour
+// of recordManualPayment) left that field stale, which is the root cause of
+// orders showing "Balance Due" / "Pending" even after being paid.
+//
+// Given a customer + an ordered list of target orders (oldest-first) and a
+// total amount received, this fills each order's remaining balance in turn
+// — fully settling earlier orders before any amount spills into the next —
+// and writes one ledger entry per order actually touched (so the ledger
+// stays traceable back to specific orders), plus a single customer
+// outstandingDue reduction for the whole amount, all in one transaction.
+export interface OrderPaymentAllocation {
+  orderId: string;
+  amountApplied: number;   // ₹ applied to this order from the payment
+  newAmountCollected: number;
+  fullySettled: boolean;
+}
+
+export async function applyPaymentToOrders(
+  customerId: string,
+  targetOrders: Array<{ id: string; totalAmount: number; amountCollected?: number; adminCollected?: number }>,
+  totalAmountReceived: number,
+  paymentMode: "cash" | "upi" | "bank" | "cheque" | "credit",
+  note: string,
+  adminId: string,
+  adminName: string
+): Promise<OrderPaymentAllocation[]> {
+  if (totalAmountReceived <= 0) return [];
+
+  // Oldest-first: caller is expected to have already sorted `targetOrders`,
+  // but we don't rely on that — sort defensively isn't possible here since
+  // we don't have createdAt in this minimal shape, so callers MUST pass
+  // orders already in the order they want filled (oldest first).
+  let remaining = totalAmountReceived;
+  const allocations: OrderPaymentAllocation[] = [];
+
+  for (const o of targetOrders) {
+    if (remaining <= 0) break;
+    const alreadyCollected = o.amountCollected ?? 0;
+    const balance = Math.max(0, round2(o.totalAmount - alreadyCollected));
+    if (balance <= 0) continue; // already fully paid, skip
+
+    const applied = Math.min(balance, remaining);
+    remaining = round2(remaining - applied);
+    const newAmountCollected = round2(alreadyCollected + applied);
+
+    allocations.push({
+      orderId: o.id,
+      amountApplied: applied,
+      newAmountCollected,
+      fullySettled: newAmountCollected >= o.totalAmount - 0.01,
+    });
+  }
+
+  if (allocations.length === 0) return [];
+
+  await runTransaction(db, async (t) => {
+    const custRef  = doc(db, "customers", customerId);
+    const custSnap = await t.get(custRef);
+    if (!custSnap.exists()) throw new Error("Customer not found");
+
+    const currentDue: number = custSnap.data().outstandingDue || 0;
+    const totalApplied = round2(allocations.reduce((s, a) => s + a.amountApplied, 0));
+    const newDue = Math.max(0, round2(currentDue - totalApplied));
+
+    for (const alloc of allocations) {
+      const orderRef = doc(db, "orders", alloc.orderId);
+      const order = targetOrders.find((o) => o.id === alloc.orderId)!;
+      const priorAdminCollected = order.adminCollected ?? 0;
+      t.update(orderRef, {
+        amountCollected: alloc.newAmountCollected,
+        adminCollected: round2(priorAdminCollected + alloc.amountApplied),
+        balanceDue: Math.max(0, round2(order.totalAmount - alloc.newAmountCollected)),
+        paymentMode,
+      });
+
+      const entryRef = doc(ledgerCol(customerId));
+      t.set(entryRef, {
+        type: "manual_payment",
+        direction: "credit",
+        amount: alloc.amountApplied,
+        orderId: alloc.orderId,
+        note: note || `Payment (${paymentMode}) collected for order #${alloc.orderId.slice(0, 8).toUpperCase()}`,
+        createdBy: adminId,
+        createdByName: adminName,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    t.update(custRef, { outstandingDue: newDue });
+  });
+
+  return allocations;
+}
+
+// Convenience wrapper for the common single-order "Record Payment" action
+// in the order detail drawer (admin marks one specific order as paid,
+// fully or partially).
+export async function recordSingleOrderPayment(
+  customerId: string,
+  order: { id: string; totalAmount: number; amountCollected?: number; adminCollected?: number },
+  amount: number,
+  paymentMode: "cash" | "upi" | "bank" | "cheque" | "credit",
+  note: string,
+  adminId: string,
+  adminName: string
+): Promise<OrderPaymentAllocation | null> {
+  const result = await applyPaymentToOrders(
+    customerId, [order], amount, paymentMode, note, adminId, adminName
+  );
+  return result[0] ?? null;
+}
+
+function round2(n: number): number { return Math.round(n * 100) / 100; }
 
 // ── Record adjustment (positive = add due, negative = reduce due) ─
 export async function recordAdjustment(

@@ -112,7 +112,15 @@ export default function HandoverModal({ order, onClose, onDone }: HandoverModalP
         totalAmount:     Math.round(newTotal * 100) / 100,
         advancePaid:     0,
         balanceDue:      Math.round(newTotal * 100) / 100,
-        status:          "pending",
+        // Goes straight to "packed", not "pending" — the returned quantity
+        // was already physically handed back to the warehouse and its
+        // reservedStock was already restored above in handleConfirmHandover,
+        // so there's nothing left for packing staff to pick. Re-running it
+        // through the normal pending → packed flow would be redundant.
+        status:          "packed",
+        packedAt:        now,
+        packedBy:        user?.uid  ?? "",
+        packedByName:    user?.name ?? "",
         paymentMode:     "credit",
         source:          "partial_reorder",
         parentOrderId:   order.id!,

@@ -160,8 +160,9 @@ export interface Order {
   items: OrderItem[];
   totalAmount: number;
   advancePaid?: number;      // advance collected by field agent at order creation
-  balanceDue?: number;       // totalAmount - advancePaid; remaining for delivery
-  amountCollected?: number;  // updated by delivery agent at delivery
+  balanceDue?: number;       // totalAmount - amountCollected; remaining balance
+  amountCollected?: number;  // cumulative total collected so far (advance + delivery + admin-recorded)
+  adminCollected?: number;   // portion of amountCollected added via admin "Record Payment" (NOT physically held by the delivery agent — excluded from their cash-in-hand)
   paymentMode?: "cash" | "upi" | "bank" | "credit" | "pending";
   status: OrderStatus;
   deliveryPersonId?: string;

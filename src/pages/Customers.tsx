@@ -9,7 +9,7 @@ import { Customer, Region } from "../types";
 import { LedgerEntry } from "../types/ledger";
 import Pagination from "../components/Pagination";
 import { Order } from "../types";
-import { getLedger, calcBalance, recordManualPayment, recordAdjustment } from "../utils/ledger";
+import { getLedger, calcBalance, recordManualPayment, recordAdjustment, applyPaymentToOrders } from "../utils/ledger";
 import MapPicker from "../components/MapPicker";
 import { useAuthStore } from "../store/authStore";
 import { useModalKeyboard } from "../hooks/useModalKeyboard";
@@ -37,6 +37,8 @@ const ENTRY_COLORS: Record<string, string> = {
   manual_payment:   "text-green-600",
   adjustment:       "text-gray-600",
 };
+
+function round2(n: number): number { return Math.round(n * 100) / 100; }
 
 export default function Customers() {
   const [customers, setCustomers]     = useState<Customer[]>([]);
@@ -546,6 +548,7 @@ function LedgerModal({ customer, isAdmin, onClose }: {
   const [amount, setAmount]       = useState("");
   const [note, setNote]           = useState("");
   const [saving, setSaving]       = useState(false);
+  const [selectedOrderIds, setSelectedOrderIds] = useState<Set<string>>(new Set());
 
   const fetchOrders = async () => {
     setOrdersLoading(true);
@@ -671,11 +674,40 @@ function LedgerModal({ customer, isAdmin, onClose }: {
   };
 
   useEffect(() => { fetchLedger(); }, [customer.id]);
-  useEffect(() => { if (tab === "orders") fetchOrders(); }, [tab]);
+  useEffect(() => { if (tab === "orders" || tab === "payment") fetchOrders(); }, [tab]);
 
   const balance = calcBalance(entries);
 
   const [paymentMode, setPaymentMode] = useState<"cash"|"upi"|"bank"|"cheque">("cash");
+
+  // Orders with an outstanding balance, oldest first — this is the pool the
+  // admin picks from when settling a payment against specific order(s).
+  // Oldest-first ordering matters: applyPaymentToOrders fills whichever
+  // orders are passed to it in array order, fully settling each before any
+  // amount spills into the next.
+  const unpaidOrdersOldestFirst = useMemo(() => {
+    return custOrders
+      .filter((o) => o.status !== "cancelled")
+      .filter((o) => Math.max(0, Math.round((o.totalAmount - (o.amountCollected ?? 0)) * 100) / 100) > 0)
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }, [custOrders]);
+
+  const toggleOrderSelection = (orderId: string) => {
+    setSelectedOrderIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(orderId)) next.delete(orderId);
+      else next.add(orderId);
+      return next;
+    });
+  };
+
+  // Orders the admin has checked, kept in the oldest-first order so the
+  // allocation always fills earlier orders before later ones, regardless of
+  // click order.
+  const selectedOrdersOldestFirst = unpaidOrdersOldestFirst.filter((o) => selectedOrderIds.has(o.id!));
+  const selectedOrdersTotalDue = round2(
+    selectedOrdersOldestFirst.reduce((s, o) => s + Math.max(0, o.totalAmount - (o.amountCollected ?? 0)), 0)
+  );
 
   const handlePayment = async () => {
     const amt = parseFloat(amount);
@@ -684,15 +716,41 @@ function LedgerModal({ customer, isAdmin, onClose }: {
       alert("Amount cannot exceed the current balance due.");
       return;
     }
+    if (selectedOrdersOldestFirst.length > 0 && amt > selectedOrdersTotalDue + 0.01) {
+      alert(`Amount exceeds the total due for the ${selectedOrdersOldestFirst.length} selected order(s) (₹${selectedOrdersTotalDue.toFixed(2)}). Select more orders, or reduce the amount, or deselect all orders for a general (non order-linked) payment.`);
+      return;
+    }
     setSaving(true);
     try {
-      await recordManualPayment(
-        customer.id!, amt,
-        (note.trim() || "Manual payment") + " [" + paymentMode + "]",
-        user!.uid, user!.name
-      );
-      setAmount(""); setNote("");
+      if (selectedOrdersOldestFirst.length > 0) {
+        // Order-aware settlement — fills the selected orders oldest-first,
+        // fully settling each before any remainder spills into the next.
+        // This keeps order.amountCollected / balanceDue / paymentMode in
+        // sync, which is what every report and the order drawer read from.
+        await applyPaymentToOrders(
+          customer.id!,
+          selectedOrdersOldestFirst.map((o) => ({
+            id: o.id!, totalAmount: o.totalAmount,
+            amountCollected: o.amountCollected, adminCollected: (o as any).adminCollected,
+          })),
+          amt,
+          paymentMode,
+          note.trim(),
+          user!.uid, user!.name
+        );
+      } else {
+        // No specific order(s) chosen — plain ledger-only credit (e.g. a
+        // goodwill adjustment or a payment that genuinely isn't tied to a
+        // specific order). Does not touch any order doc.
+        await recordManualPayment(
+          customer.id!, amt,
+          (note.trim() || "Manual payment") + " [" + paymentMode + "]",
+          user!.uid, user!.name
+        );
+      }
+      setAmount(""); setNote(""); setSelectedOrderIds(new Set());
       await fetchLedger();
+      await fetchOrders();
       setTab("ledger");
     } catch (e: any) { alert(e.message); }
     finally { setSaving(false); }
@@ -751,7 +809,7 @@ function LedgerModal({ customer, isAdmin, onClose }: {
           </button>
           {isAdmin && (
             <>
-              <button onClick={() => { setTab("payment"); setAmount(""); setNote(""); }}
+              <button onClick={() => { setTab("payment"); setAmount(""); setNote(""); setSelectedOrderIds(new Set()); }}
                 className={`flex-1 py-3 text-sm font-medium transition-all ${tab === "payment" ? "border-b-2 border-green-500 text-green-600" : "text-gray-500 hover:text-gray-700"}`}>
                 💰 Payment
               </button>
@@ -921,6 +979,51 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                     <span className="font-bold text-red-600 text-xl">₹{balance.toFixed(2)}</span>
                   </div>
 
+                  {/* Settle specific order(s) — optional */}
+                  {unpaidOrdersOldestFirst.length > 0 && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Settle Specific Order(s) <span className="text-gray-400 font-normal">(optional)</span>
+                      </label>
+                      <p className="text-xs text-gray-400 mb-2">
+                        Pick which unpaid orders this payment covers. Oldest orders are filled first — pick fewer
+                        orders for a focused settlement, or several to clear multiple at once.
+                      </p>
+                      <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 max-h-56 overflow-y-auto">
+                        {unpaidOrdersOldestFirst.map((o) => {
+                          const due = Math.max(0, round2(o.totalAmount - (o.amountCollected ?? 0)));
+                          const checked = selectedOrderIds.has(o.id!);
+                          return (
+                            <label key={o.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm cursor-pointer hover:bg-gray-50">
+                              <span className="flex items-center gap-2 min-w-0">
+                                <input type="checkbox" checked={checked}
+                                  onChange={() => toggleOrderSelection(o.id!)}
+                                  className="rounded border-gray-300" />
+                                <span className="truncate">
+                                  #{o.orderNo ?? o.id!.slice(0, 8).toUpperCase()}
+                                  <span className="text-gray-400 ml-1">{new Date(o.createdAt).toLocaleDateString("en-IN")}</span>
+                                </span>
+                              </span>
+                              <span className="font-medium text-red-600 flex-shrink-0">₹{due.toFixed(2)}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      {selectedOrdersOldestFirst.length > 0 && (
+                        <div className="flex justify-between items-center mt-2 px-1">
+                          <span className="text-xs text-gray-500">
+                            {selectedOrdersOldestFirst.length} order{selectedOrdersOldestFirst.length > 1 ? "s" : ""} selected
+                          </span>
+                          <button type="button"
+                            onClick={() => setAmount(selectedOrdersTotalDue.toFixed(2))}
+                            className="text-xs bg-orange-100 text-orange-700 px-3 py-1 rounded-full hover:bg-orange-200 font-medium">
+                            Use total: ₹{selectedOrdersTotalDue.toFixed(2)}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Amount input */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Amount Received (₹) *</label>
@@ -973,6 +1076,11 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                       <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-600 font-medium">
                         ⚠️ Amount exceeds balance due. Max is ₹{balance.toFixed(2)}
                       </div>
+                    ) : selectedOrdersOldestFirst.length > 0 && parseFloat(amount) > selectedOrdersTotalDue + 0.01 ? (
+                      <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-600 font-medium">
+                        ⚠️ Amount exceeds the ₹{selectedOrdersTotalDue.toFixed(2)} due on the {selectedOrdersOldestFirst.length} selected order(s).
+                        Select more orders or reduce the amount.
+                      </div>
                     ) : (
                       <div className="bg-gray-50 rounded-lg px-4 py-3 text-sm flex justify-between">
                         <span className="text-gray-500">Balance after payment:</span>
@@ -985,9 +1093,13 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                   )}
 
                   <div className="flex gap-3 pt-2">
-                    <button onClick={() => setTab("ledger")} className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm">Cancel</button>
+                    <button onClick={() => { setTab("ledger"); setSelectedOrderIds(new Set()); }} className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm">Cancel</button>
                     <button onClick={handlePayment}
-                      disabled={saving || !amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0 || parseFloat(amount) > balance + 0.01}
+                      disabled={
+                        saving || !amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0 ||
+                        parseFloat(amount) > balance + 0.01 ||
+                        (selectedOrdersOldestFirst.length > 0 && parseFloat(amount) > selectedOrdersTotalDue + 0.01)
+                      }
                       className="flex-1 bg-green-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-green-600 disabled:opacity-50">
                       {saving ? "Saving..." : "✅ Record Payment"}
                     </button>

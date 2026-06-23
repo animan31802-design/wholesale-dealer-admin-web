@@ -11,6 +11,7 @@ import { useAuthStore } from "../store/authStore";
 import { useModalKeyboard } from "../hooks/useModalKeyboard";
 const fmtQ = (n: number) => parseFloat(n.toFixed(4)).toString();
 import { buildInvoicePDF } from "../utils/invoice";
+import { recordSingleOrderPayment } from "../utils/ledger";
 import Pagination from "../components/Pagination";
 import { Customer, InvoiceType, BillingMode, ChargeDiscountType, AppliedChargeDiscount } from "../types";
 import { useTamilSearch } from "../utils/UseTamilSearch";
@@ -290,7 +291,7 @@ export default function Orders() {
       "Items":             o.items.map((i) => `${i.productName} x${i.quantity}`).join(", "),
       "Total Amount":      o.totalAmount,
       "Amount Collected":  o.amountCollected ?? "",
-      "Balance Due":       o.amountCollected !== undefined ? Math.max(0, o.totalAmount - (o.advancePaid ?? 0) - o.amountCollected) : "",
+      "Balance Due":       o.amountCollected !== undefined ? Math.max(0, Math.round((o.totalAmount - o.amountCollected) * 100) / 100) : "",
       "Status":            STATUS_LABELS[o.status] || o.status,
       "Delivery Agent":    o.deliveryPersonName || "",
       "Vehicle":           o.vehicleNumber || "",
@@ -660,7 +661,7 @@ export default function Orders() {
                     )}
                     {order.status === "delivered" &&
                       order.amountCollected !== undefined && (() => {
-                        const due = Math.max(0, order.totalAmount - (order.advancePaid ?? 0) - order.amountCollected);
+                        const due = Math.max(0, Math.round((order.totalAmount - order.amountCollected) * 100) / 100);
                         return due > 0 ? (
                           <span className="bg-red-100 text-red-600 text-xs px-2 py-1 rounded-lg font-medium">
                             ₹{due.toFixed(2)} due
@@ -1632,13 +1633,17 @@ export function OrderDetailPanel({
     }] : []),
   ];
 
+  // `amountCollected` is cumulative and already includes any advance paid at
+  // order creation (see CreateOrderPage: amountCollected starts at `paid`).
+  // Subtracting advancePaid again here was double-counting it — fixed.
   const balance =
     order.amountCollected !== undefined
-      ? Math.max(0, order.totalAmount - (order.advancePaid ?? 0) - order.amountCollected)
+      ? Math.max(0, Math.round((order.totalAmount - order.amountCollected) * 100) / 100)
       : null;
 
   const [receiveBack, setReceiveBack]   = useState(false);
   const [reassign,    setReassign]      = useState(false);
+  const [showRecordPayment, setShowRecordPayment] = useState(false);
 
   return (
     <>
@@ -1647,6 +1652,9 @@ export function OrderDetailPanel({
       )}
       {reassign && (
         <ReassignDeliveryModal order={order} deliveryUsers={deliveryUsers} onClose={() => setReassign(false)} onDone={() => { setReassign(false); onClose(); }} />
+      )}
+      {showRecordPayment && (
+        <RecordPaymentModal order={order} onClose={() => setShowRecordPayment(false)} onDone={() => { setShowRecordPayment(false); onClose(); }} />
       )}
       {/* Backdrop */}
       <div className="fixed inset-0 bg-black/40 z-40" onClick={onClose} />
@@ -1767,6 +1775,12 @@ export function OrderDetailPanel({
                   <span className="text-gray-500">Payment Mode</span>
                   <span className="font-medium text-gray-700 capitalize">{order.paymentMode}</span>
                 </div>
+              )}
+              {isAdmin && isDelivered && balance !== null && balance > 0 && (
+                <button onClick={() => setShowRecordPayment(true)}
+                  className="w-full mt-2 bg-green-600 text-white py-2 rounded-xl text-sm font-semibold hover:bg-green-700">
+                  💰 Record Payment
+                </button>
               )}
             </div>
           </div>
@@ -2032,6 +2046,114 @@ function ReceiveBackModal({ order, onClose, onDone }: {
           <button onClick={handleSubmit} disabled={saving}
             className="flex-1 bg-red-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-red-600 disabled:opacity-50">
             {saving ? "Saving..." : "✅ Confirm Received Back"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Record Payment Modal (single order, admin) ──────────────────────────────
+// Lets admin mark a delivered order's payment as collected — fully or
+// partially — when money was received outside the normal delivery-agent
+// flow (e.g. customer paid in person at the shop, by bank transfer later,
+// etc). Updates order.amountCollected/balanceDue/paymentMode AND writes a
+// linked ledger entry, so the order drawer, every report, and the customer
+// ledger all stay in sync. See utils/ledger.ts: recordSingleOrderPayment.
+function RecordPaymentModal({ order, onClose, onDone }: {
+  order: Order; onClose: () => void; onDone: () => void;
+}) {
+  const { user } = useAuthStore();
+  const alreadyCollected = order.amountCollected ?? 0;
+  const remainingBalance = Math.max(0, Math.round((order.totalAmount - alreadyCollected) * 100) / 100);
+
+  const [amount, setAmount]   = useState(String(remainingBalance));
+  const [mode, setMode]       = useState<"cash" | "upi" | "bank" | "cheque" | "credit">("cash");
+  const [note, setNote]       = useState("");
+  const [saving, setSaving]   = useState(false);
+
+  const amountNum = parseFloat(amount) || 0;
+  const isValid = amountNum > 0 && amountNum <= remainingBalance + 0.01;
+
+  const handleSubmit = async () => {
+    if (!isValid || !order.customerId || !order.id) return;
+    setSaving(true);
+    try {
+      await recordSingleOrderPayment(
+        order.customerId,
+        { id: order.id, totalAmount: order.totalAmount, amountCollected: order.amountCollected, adminCollected: (order as any).adminCollected },
+        amountNum,
+        mode,
+        note.trim(),
+        user!.uid,
+        user!.name
+      );
+      onDone();
+    } catch (err: any) {
+      alert(err.message || "Failed to record payment.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  useModalKeyboard({ onClose, onConfirm: handleSubmit, disabled: saving || !isValid });
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-800">💰 Record Payment</h3>
+            <p className="text-sm text-gray-500">{order.customerName} — #{order.orderNo ?? order.id?.slice(0, 8).toUpperCase()}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="bg-green-50 border border-green-100 rounded-xl px-4 py-3 text-sm text-green-700 flex justify-between">
+            <span>Balance Due</span>
+            <span className="font-bold">₹{remainingBalance.toFixed(2)}</span>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Amount Collected <span className="text-red-500">*</span></label>
+            <input
+              type="number" min="0.01" max={remainingBalance} step="0.01"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
+            />
+            {amountNum > 0 && amountNum < remainingBalance && (
+              <p className="text-xs text-amber-600 mt-1">
+                Partial payment — ₹{(remainingBalance - amountNum).toFixed(2)} will still remain due.
+              </p>
+            )}
+            {amountNum > remainingBalance + 0.01 && (
+              <p className="text-xs text-red-500 mt-1">Cannot exceed the balance due (₹{remainingBalance.toFixed(2)}).</p>
+            )}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Payment Mode</label>
+            <select value={mode} onChange={(e) => setMode(e.target.value as any)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300">
+              <option value="cash">Cash</option>
+              <option value="upi">UPI</option>
+              <option value="bank">Bank Transfer</option>
+              <option value="cheque">Cheque</option>
+              <option value="credit">Credit</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Note (optional)</label>
+            <input
+              type="text" value={note} onChange={(e) => setNote(e.target.value)}
+              placeholder="e.g. Collected by Ranjith via UPI"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
+            />
+          </div>
+        </div>
+        <div className="flex gap-3 px-6 pb-6">
+          <button onClick={onClose} className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm">Cancel</button>
+          <button onClick={handleSubmit} disabled={saving || !isValid}
+            className="flex-1 bg-green-600 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-green-700 disabled:opacity-50">
+            {saving ? "Saving..." : "✅ Record Payment"}
           </button>
         </div>
       </div>

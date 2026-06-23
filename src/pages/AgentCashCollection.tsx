@@ -382,16 +382,23 @@ export default function AgentCashCollection() {
 
       const advance   = (o as any).advancePaid ?? 0;
       const collected = o.amountCollected ?? 0;
+      // Exclude amounts an admin recorded directly (e.g. via the order drawer's
+      // "Record Payment" or a Customers-page settlement) — that money was never
+      // physically handed to the delivery agent, so it shouldn't count toward
+      // their cash-in-hand.
+      const adminPortion = (o as any).adminCollected ?? 0;
+      const deliveryCollected = Math.max(0, collected - adminPortion);
 
       // Field agent gets the advance paid at order creation
       if (advance > 0 && o.agentId) {
         map[o.agentId] = (map[o.agentId] ?? 0) + advance;
       }
 
-      // Delivery agent gets the full amount they collected at the door
-      // (advance is separate cash already with the field agent)
-      if (o.status === "delivered" && o.deliveryPersonId && collected > 0) {
-        map[o.deliveryPersonId] = (map[o.deliveryPersonId] ?? 0) + collected;
+      // Delivery agent gets the amount they physically collected at the door
+      // (advance is separate cash already with the field agent; admin-recorded
+      // settlements are excluded since the delivery agent never held that cash)
+      if (o.status === "delivered" && o.deliveryPersonId && deliveryCollected > 0) {
+        map[o.deliveryPersonId] = (map[o.deliveryPersonId] ?? 0) + deliveryCollected;
       }
     });
 
@@ -412,7 +419,9 @@ export default function AgentCashCollection() {
         if (agent.role === "field_agent") return advance > 0 && o.agentId === agent.uid;
         if (agent.role === "delivery") {
           const collected = o.amountCollected ?? 0;
-          return o.status === "delivered" && o.deliveryPersonId === agent.uid && collected > advance;
+          const adminPortion = (o as any).adminCollected ?? 0;
+          const deliveryCollected = Math.max(0, collected - adminPortion);
+          return o.status === "delivered" && o.deliveryPersonId === agent.uid && deliveryCollected > advance;
         }
         return false;
       }).length;
