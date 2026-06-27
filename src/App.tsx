@@ -154,6 +154,7 @@ export default function App() {
           {/* Staff & Attendance — admin only for staff mgmt, packing staff can mark attendance */}
           <Route path="staff"      element={<AdminRoute><Staff /></AdminRoute>} />
           <Route path="attendance" element={<OpsRoute><StaffAttendance /></OpsRoute>} />
+          <Route path="/reports/attendance" element={<OpsRoute><StaffAttendanceReports /></OpsRoute>} />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />
