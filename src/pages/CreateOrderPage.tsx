@@ -1,10 +1,10 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   collection, getDocs, addDoc, query, orderBy,
-  doc, runTransaction, onSnapshot, setDoc, getDoc, increment,
+  doc, runTransaction, onSnapshot, setDoc, getDoc, increment, updateDoc,
 } from "firebase/firestore";
 import { db } from "../firebase/config";
-import { Customer, Product, Order, OrderItem } from "../types";
+import { Customer, Product, Order, OrderItem, GSTRate, ProductUnit } from "../types";
 import { useAuthStore } from "../store/authStore";
 import { useModalKeyboard } from "../hooks/useModalKeyboard";
 import { useTamilSearch } from "../utils/UseTamilSearch";
@@ -57,6 +57,34 @@ function fmtPrice(v: number): string { return Number(v).toFixed(2); }
 function fmtQty(v: number): string   { return Number.isInteger(v) ? String(v) : v.toFixed(2); }
 function round2(v: number): number   { return Math.round(v * 100) / 100; }
 function fmtRupees(v: number): string { return `₹${fmtPrice(v)}`; }
+
+// ── Per-bill product overrides ───────────────────────────────────
+// Lets a field agent fix a product's name, price, unit, GST%, category, or
+// fractional-sale setting without leaving the "add to cart" flow.
+// Changes can be applied to this bill only (in-memory) or saved back to
+// the master catalogue. Intentionally NOT persisted to draftStore — draft
+// restore always uses current catalogue data.
+interface OrderItemOverride {
+  name?: string;
+  price?: number;
+  unit?: ProductUnit;
+  gst?: GSTRate;
+  category?: string;
+  sellInFraction?: boolean;
+}
+function overrideIsAllDefault(o: OrderItemOverride): boolean {
+  return o.name === undefined && o.price === undefined && o.unit === undefined &&
+    o.gst === undefined && o.category === undefined && o.sellInFraction === undefined;
+}
+
+const EDIT_UNITS: ProductUnit[] = ["Piece", "KG", "Gram", "Liter", "ML", "Box", "Packet", "Dozen", "Bag", "Bottle", "Other"];
+const EDIT_GST_RATES: { label: string; value: GSTRate }[] = [
+  { label: "No GST", value: "none" },
+  { label: "5%", value: "5" },
+  { label: "12%", value: "12" },
+  { label: "18%", value: "18" },
+  { label: "28%", value: "28" },
+];
 
 // ── WhatsApp order message builder ───────────────────────────────
 function buildWhatsAppMessage(params: {
@@ -205,6 +233,194 @@ function QtyDialog({
   );
 }
 
+// ─── Product Edit Dialog ──────────────────────────────────────────
+// Billing-time quick edit — fix a product's name, price, unit, GST%, or
+// category without leaving the order screen. "Save to catalogue" updates
+// the product permanently; "This bill only" applies just to this order.
+
+function ProductEditDialog({
+  product, currentOverride, existingCategories, onSaveToCatalogue, onBillOnly, onDismiss,
+}: {
+  product: Product; currentOverride?: OrderItemOverride; existingCategories: string[];
+  onSaveToCatalogue: (o: OrderItemOverride) => void;
+  onBillOnly: (o: OrderItemOverride) => void;
+  onDismiss: () => void;
+}) {
+  const [name, setName]     = useState(currentOverride?.name ?? product.name);
+  const [price, setPrice]   = useState(String(currentOverride?.price ?? product.sellingPrice));
+  const [unit, setUnit]     = useState<string>(currentOverride?.unit ?? product.unit);
+  const [customUnit, setCustomUnit] = useState(
+    EDIT_UNITS.includes((currentOverride?.unit ?? product.unit) as ProductUnit) ? "" : (currentOverride?.unit ?? product.unit)
+  );
+  const [gst, setGst]       = useState<GSTRate>(currentOverride?.gst ?? product.gst);
+  const [category, setCategory] = useState(currentOverride?.category ?? product.category);
+  const [sellInFraction, setSellInFraction] = useState(currentOverride?.sellInFraction ?? product.sellInFraction);
+
+  const effectiveUnit = customUnit.trim() ? customUnit.trim() : unit;
+  const priceNum      = parseFloat(price);
+  const priceValid    = !isNaN(priceNum) && priceNum > 0;
+  const canConfirm    = name.trim().length > 0 && priceValid;
+
+  const buildOverride = (): OrderItemOverride => ({
+    name:           name.trim() !== product.name ? name.trim() : undefined,
+    price:          priceValid && priceNum !== product.sellingPrice ? priceNum : undefined,
+    unit:           effectiveUnit !== product.unit ? (effectiveUnit as ProductUnit) : undefined,
+    gst:            gst !== product.gst ? gst : undefined,
+    category:       category.trim() && category.trim() !== product.category ? category.trim() : undefined,
+    sellInFraction: sellInFraction !== product.sellInFraction ? sellInFraction : undefined,
+  });
+
+  useModalKeyboard({ onClose: onDismiss, confirmOnEnter: false });
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4"
+      onClick={onDismiss}
+    >
+      <div
+        className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <p className="font-semibold text-gray-800 mb-0.5">Edit product</p>
+        <p className="text-xs text-gray-400 mb-4">
+          Changes apply to this bill. Use "Save to catalogue" to update the product permanently.
+        </p>
+
+        <div className="flex flex-col gap-3">
+          {/* Name */}
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">Product name</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full text-sm px-3 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-300"
+            />
+          </div>
+
+          {/* Price */}
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">Selling price (₹)</label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              className="w-full text-sm px-3 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-300"
+            />
+            <p className="text-xs text-gray-400 mt-1">Catalogue: ₹{fmtPrice(product.sellingPrice)}</p>
+          </div>
+
+          {/* Unit */}
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">Unit</label>
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
+              {EDIT_UNITS.map((opt) => (
+                <button key={opt} type="button"
+                  onClick={() => { setUnit(opt); setCustomUnit(""); }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border whitespace-nowrap transition-all ${
+                    unit === opt && !customUnit
+                      ? "bg-orange-500 text-white border-orange-500"
+                      : "border-gray-300 text-gray-600 hover:border-orange-300"
+                  }`}>
+                  {opt}
+                </button>
+              ))}
+            </div>
+            <input
+              type="text"
+              value={customUnit}
+              onChange={(e) => setCustomUnit(e.target.value)}
+              placeholder="Custom unit (optional), e.g. Bundle, Tray…"
+              className="w-full text-sm px-3 py-2 mt-1.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-300"
+            />
+          </div>
+
+          {/* GST */}
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">GST %</label>
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
+              {EDIT_GST_RATES.map((g) => (
+                <button key={g.value} type="button"
+                  onClick={() => setGst(g.value)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border whitespace-nowrap transition-all ${
+                    gst === g.value
+                      ? "bg-orange-500 text-white border-orange-500"
+                      : "border-gray-300 text-gray-600 hover:border-orange-300"
+                  }`}>
+                  {g.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Category */}
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">Category</label>
+            <input
+              type="text"
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full text-sm px-3 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-300"
+            />
+            {existingCategories.length > 0 && (
+              <div className="flex gap-1.5 overflow-x-auto pb-1 mt-1.5">
+                {existingCategories.map((cat) => (
+                  <button key={cat} type="button" onClick={() => setCategory(cat)}
+                    className="px-2.5 py-1 rounded-full text-xs border border-gray-200 text-gray-500 whitespace-nowrap hover:border-orange-300">
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Sell in fractions toggle */}
+          <div className="flex items-center justify-between bg-gray-50 rounded-xl px-4 py-3">
+            <div>
+              <p className="text-sm text-gray-700">Sell in fractions</p>
+              <p className="text-xs text-gray-400">
+                {sellInFraction ? "e.g. 0.5 Kg, 0.250 Kg" : "Whole units only (1, 2, 3…)"}
+              </p>
+            </div>
+            <button type="button"
+              onClick={() => setSellInFraction(!sellInFraction)}
+              className={`w-11 h-6 rounded-full transition-colors relative flex-shrink-0 ${
+                sellInFraction ? "bg-orange-500" : "bg-gray-300"
+              }`}>
+              <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${
+                sellInFraction ? "translate-x-5" : "translate-x-0.5"
+              }`} />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2 mt-5">
+          <button
+            disabled={!canConfirm}
+            onClick={() => onSaveToCatalogue(buildOverride())}
+            className="w-full bg-orange-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-orange-600 disabled:opacity-40"
+          >
+            Save to catalogue
+          </button>
+          <button
+            disabled={!canConfirm}
+            onClick={() => onBillOnly(buildOverride())}
+            className="w-full border border-orange-300 text-orange-600 py-2.5 rounded-xl text-sm font-semibold hover:bg-orange-50 disabled:opacity-40"
+          >
+            This bill only
+          </button>
+          <button onClick={onDismiss}
+            className="w-full text-gray-400 py-2 text-sm hover:text-gray-600">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Back/Draft Dialog ────────────────────────────────────────────
 
 function BackDraftDialog({
@@ -243,10 +459,10 @@ function BackDraftDialog({
 // ─── Product Row ──────────────────────────────────────────────────
 
 function ProductRow({
-  product, qtyInCart, onAdd, onRemove, onQtyTapped,
+  product, qtyInCart, onAdd, onRemove, onQtyTapped, onProductTapped,
 }: {
   product: Product; qtyInCart: number;
-  onAdd: () => void; onRemove: () => void; onQtyTapped: () => void;
+  onAdd: () => void; onRemove: () => void; onQtyTapped: () => void; onProductTapped: () => void;
 }) {
   const avail       = availableQty(product);
   const outOfStock  = product.trackInventory && avail <= 0;
@@ -266,8 +482,8 @@ function ProductRow({
 
   return (
     <div className="flex items-center gap-3 py-3 border-b border-gray-100 last:border-0">
-      {/* Info */}
-      <div className="flex-1 min-w-0">
+      {/* Info — tap to edit name/price/unit/GST/category for this bill (or the catalogue) */}
+      <div className="flex-1 min-w-0 cursor-pointer" onClick={onProductTapped}>
         <p className="font-medium text-sm text-gray-800 mb-0.5 truncate">{product.name}</p>
         <p className={`text-xs ${lowStock ? "text-red-500" : "text-gray-400"}`}>
           ₹{fmtPrice(displayPrice)} / {product.unit}
@@ -341,11 +557,11 @@ function ProductRow({
 // ─── Cart Item Row ────────────────────────────────────────────────
 
 function CartItemRow({
-  item, index, onDecrease, onIncrease, onRemove, onQtyTapped,
+  item, index, onDecrease, onIncrease, onRemove, onQtyTapped, onPriceTapped, isOverridden,
 }: {
   item: OrderItem; index: number;
   onDecrease: () => void; onIncrease: () => void;
-  onRemove: () => void; onQtyTapped: () => void;
+  onRemove: () => void; onQtyTapped: () => void; onPriceTapped: () => void; isOverridden: boolean;
 }) {
   const gstPct    = parseFloat(item.gst ?? "0") || 0;
   const inclusive = item.taxInclusive === true;
@@ -365,7 +581,7 @@ function CartItemRow({
             <span className="text-gray-400 mr-1">{index + 1}.</span>
             {item.productName}
           </p>
-          <p className="text-xs text-gray-400">
+          <p className="text-xs text-gray-400 cursor-pointer hover:text-orange-500" onClick={onPriceTapped}>
             ₹{fmtPrice(item.price)} × {fmtQty(item.quantity)} {item.unit}
             {" = "}
             {gstPct > 0 && !inclusive
@@ -373,6 +589,9 @@ function CartItemRow({
               : <>₹{fmtPrice(billedLineTotal)}</>
             }
           </p>
+          {isOverridden && (
+            <p className="text-xs text-orange-500 mt-0.5">✏ Edited for this bill</p>
+          )}
           {gstAmt > 0 && (
             <p className="text-xs text-gray-400 mt-0.5">
               {inclusive
@@ -440,6 +659,10 @@ export default function CreateOrderPage() {
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [sortMode, setSortMode]                 = useState<"frequent"|"name">("frequent");
   const [qtyDialogProduct, setQtyDialogProduct] = useState<Product | null>(null);
+  // Per-bill field overrides — productId → OrderItemOverride.
+  // Intentionally NOT persisted in draftStore; draft restore always uses catalogue data.
+  const [cartOverrides, setCartOverrides] = useState<Record<string, OrderItemOverride>>({});
+  const [productEditTarget, setProductEditTarget] = useState<Product | null>(null);
   const [showBackDialog, setShowBackDialog]     = useState(false);
   const [draftWarnings, setDraftWarnings]       = useState<string[]>([]);
 
@@ -548,8 +771,14 @@ export default function CreateOrderPage() {
       .filter((p) => (cartQty[p.id!] ?? 0) > 0)
       .map((p) => {
         const qty       = cartQty[p.id!];
-        const price     = getSlabPrice(p, qty);           // selling price per unit (as entered)
-        const gstPct    = gstRate(p);
+        const override  = cartOverrides[p.id!];
+        // Bill-only override takes precedence over catalogue values
+        const effName   = override?.name ?? p.name;
+        const effUnit   = override?.unit ?? p.unit;
+        const effGst    = override?.gst  ?? p.gst;
+        // For price: if overridden use that flat price, else use slab logic
+        const price     = override?.price ?? getSlabPrice(p, qty);
+        const gstPct    = effGst === "none" || !effGst ? 0 : parseFloat(effGst);
         const inclusive = p.taxInclusive === true;
         const bd        = gstPct > 0 ? gstBreakdown(price, gstPct, inclusive) : null;
 
@@ -560,18 +789,20 @@ export default function CreateOrderPage() {
 
         const item: OrderItem = {
           productId:   p.id!,
-          productName: p.name,
+          productName: effName,
           price,          // selling price per unit (pre-addition for exclusive; inclusive as-is)
-          unit:        p.unit,
+          unit:        effUnit,
           quantity:    qty,
           total,          // billed line total (customer pays this)
         };
-        if (p.gst && p.gst !== "none") item.gst          = p.gst;
-        if (p.hsn)                      item.hsn          = p.hsn;
-        if (inclusive)                  item.taxInclusive = true;
+        if (effGst && effGst !== "none") item.gst        = effGst;
+        if (p.hsn)                       item.hsn        = p.hsn;
+        if (inclusive)                   item.taxInclusive = true;
         return item;
       });
-  }, [cartQty, products]);
+  }, [cartQty, products, cartOverrides]);
+
+  const overriddenProductIds = useMemo(() => new Set(Object.keys(cartOverrides)), [cartOverrides]);
 
   // itemsTotal = sum of pre-tax amounts (taxable base across all items)
   const itemsTotal = useMemo(() =>
@@ -636,6 +867,37 @@ export default function CreateOrderPage() {
   const removeItem = useCallback((productId: string) => {
     setCartQty((prev) => { const n = { ...prev }; delete n[productId]; return n; });
   }, []);
+
+  const applyBillOnlyOverride = useCallback((productId: string, override: OrderItemOverride) => {
+    setCartOverrides((prev) => {
+      const n = { ...prev };
+      if (overrideIsAllDefault(override)) delete n[productId];
+      else n[productId] = override;
+      return n;
+    });
+    setProductEditTarget(null);
+  }, []);
+
+  const saveOverrideToCatalogue = useCallback(async (product: Product, override: OrderItemOverride) => {
+    // Persist the changed fields back to the product doc
+    const updates: Partial<Product> = {};
+    if (override.name           !== undefined) updates.name           = override.name;
+    if (override.price          !== undefined) updates.sellingPrice   = override.price;
+    if (override.unit           !== undefined) updates.unit           = override.unit;
+    if (override.gst            !== undefined) updates.gst            = override.gst;
+    if (override.category       !== undefined) updates.category       = override.category;
+    if (override.sellInFraction !== undefined) updates.sellInFraction = override.sellInFraction;
+    updates.updatedAt = new Date().toISOString();
+
+    try {
+      await updateDoc(doc(db, "products", product.id!), { ...updates });
+    } catch {
+      setMessage("✕ Failed to update product — changes applied to this bill only");
+    }
+    // Also apply for this bill so the cart reflects the change immediately
+    // (the products list will also refresh via the live onSnapshot listener)
+    applyBillOnlyOverride(product.id!, override);
+  }, [applyBillOnlyOverride]);
 
   // ── Save order to Firestore (transactional) ──────────────────────
   const handleSaveOrder = async () => {
@@ -1271,6 +1533,7 @@ export default function CreateOrderPage() {
                   onAdd={() => addToCart(p)}
                   onRemove={() => removeFromCart(p)}
                   onQtyTapped={() => setQtyDialogProduct(p)}
+                  onProductTapped={() => setProductEditTarget(p)}
                 />
               ))
             )}
@@ -1315,6 +1578,11 @@ export default function CreateOrderPage() {
                     const p = products.find((x) => x.id === item.productId);
                     if (p) setQtyDialogProduct(p);
                   }}
+                  onPriceTapped={() => {
+                    const p = products.find((x) => x.id === item.productId);
+                    if (p) setProductEditTarget(p);
+                  }}
+                  isOverridden={overriddenProductIds.has(item.productId)}
                 />
               ))}
 
@@ -1480,6 +1748,18 @@ export default function CreateOrderPage() {
             setQtyDialogProduct(null);
           }}
           onDismiss={() => setQtyDialogProduct(null)}
+        />
+      )}
+
+      {/* ── Product edit dialog ── */}
+      {productEditTarget && (
+        <ProductEditDialog
+          product={productEditTarget}
+          currentOverride={cartOverrides[productEditTarget.id!]}
+          existingCategories={categories.filter((c) => c !== "All")}
+          onSaveToCatalogue={(override) => saveOverrideToCatalogue(productEditTarget, override)}
+          onBillOnly={(override) => applyBillOnlyOverride(productEditTarget.id!, override)}
+          onDismiss={() => setProductEditTarget(null)}
         />
       )}
     </div>
