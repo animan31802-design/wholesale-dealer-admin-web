@@ -174,6 +174,7 @@ export interface Order {
   invoiceType?: InvoiceType;
   invoicedAt?: string;
   billingMode?: BillingMode;
+  invoicedDue?: number;      // customer's previous outstanding due, frozen at the time this invoice was generated (or last regenerated) — needed to reproduce the "Previous Due" line when the invoice is re-viewed later
   appliedCharges?: AppliedChargeDiscount[];  // charges/discounts applied at invoice time
   voidedInvoices?: Array<{ invoiceNumber: string; voidedAt: string; voidedBy: string; voidedByName: string }>;
   deliveryAttempts?: DeliveryAttempt[];  // history of every failed delivery attempt

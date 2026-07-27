@@ -795,7 +795,9 @@ function InvoiceModal({ order, onClose, isAdmin }: {
   const [billingMode, setBillingMode] = useState<BillingMode>(order.billingMode ?? "without_due");
   const [qrMode, setQrMode] = useState<"with_amount" | "without_amount">("without_amount");
   const [paperSize, setPaperSize] = useState<"a4" | "a5">("a4");
-  const [customerDue, setCustomerDue] = useState("");
+  const [customerDue, setCustomerDue] = useState(
+    hasInvoice && order.billingMode === "with_due" ? String((order as any).invoicedDue ?? 0) : ""
+  );
   const [loadingDefaults, setLoadingDefaults] = useState(!hasInvoice); // only wait on first-time generation
 
   // Charges & Discounts — admin-configured types loaded from settings, and the
@@ -955,6 +957,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
         invoiceNumber: minted,
         invoiceType,
         billingMode,
+        invoicedDue: billingMode === "with_due" ? (parseFloat(customerDue) || 0) : 0,
         invoicedAt: new Date().toISOString(),
         appliedCharges: selectedChargesArray,
       });
@@ -997,6 +1000,7 @@ function InvoiceModal({ order, onClose, isAdmin }: {
         invoiceNumber:   minted,
         invoiceType,
         billingMode,
+        invoicedDue:     billingMode === "with_due" ? (parseFloat(customerDue) || 0) : 0,
         invoicedAt:      new Date().toISOString(),
         voidedInvoices:  [...existingVoided, voidedEntry],
         appliedCharges:  selectedChargesArray,
