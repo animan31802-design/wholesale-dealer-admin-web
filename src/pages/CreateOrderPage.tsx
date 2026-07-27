@@ -459,19 +459,24 @@ function BackDraftDialog({
 // ─── Product Row ──────────────────────────────────────────────────
 
 function ProductRow({
-  product, qtyInCart, onAdd, onRemove, onQtyTapped, onProductTapped,
+  product, qtyInCart, override, onAdd, onRemove, onQtyTapped, onProductTapped,
 }: {
-  product: Product; qtyInCart: number;
+  product: Product; qtyInCart: number; override?: OrderItemOverride;
   onAdd: () => void; onRemove: () => void; onQtyTapped: () => void; onProductTapped: () => void;
 }) {
   const avail       = availableQty(product);
   const outOfStock  = product.trackInventory && avail <= 0;
   const atLimit     = product.trackInventory && qtyInCart >= avail;
   const lowStock    = product.trackInventory && avail <= product.minStockAlert && avail > 0;
-  const gstPct       = gstRate(product);
+
+  // Bill-only override takes precedence over catalogue values
+  const effName     = override?.name ?? product.name;
+  const effUnit     = override?.unit ?? product.unit;
+  const effGst      = override?.gst  ?? product.gst;
+  const gstPct       = effGst === "none" || !effGst ? 0 : parseFloat(effGst);
   const inclusive    = product.taxInclusive === true;
-  const displayPrice = getSlabPrice(product, Math.max(qtyInCart, 1));
-  const activePrice  = qtyInCart > 0 ? getSlabPrice(product, qtyInCart) : null;
+  const displayPrice = override?.price ?? getSlabPrice(product, Math.max(qtyInCart, 1));
+  const activePrice  = qtyInCart > 0 ? (override?.price ?? getSlabPrice(product, qtyInCart)) : null;
   // lineTotal = sum of selling prices (the price customer sees on product row)
   const lineTotal    = activePrice ? activePrice * qtyInCart : 0;
   // For inclusive: GST is already inside lineTotal; for exclusive: add on top
@@ -484,9 +489,9 @@ function ProductRow({
     <div className="flex items-center gap-3 py-3 border-b border-gray-100 last:border-0">
       {/* Info — tap to edit name/price/unit/GST/category for this bill (or the catalogue) */}
       <div className="flex-1 min-w-0 cursor-pointer" onClick={onProductTapped}>
-        <p className="font-medium text-sm text-gray-800 mb-0.5 truncate">{product.name}</p>
+        <p className="font-medium text-sm text-gray-800 mb-0.5 truncate">{effName}</p>
         <p className={`text-xs ${lowStock ? "text-red-500" : "text-gray-400"}`}>
-          ₹{fmtPrice(displayPrice)} / {product.unit}
+          ₹{fmtPrice(displayPrice)} / {effUnit}
           {gstPct > 0 && (
             <span className="text-gray-400">
               {inclusive
@@ -498,14 +503,14 @@ function ProductRow({
           {product.trackInventory ? `Stock: ${fmtQty(avail)}` : "Stock: ∞"}
         </p>
 
-        {/* Active slab price hint */}
-        {product.priceSlabs.length > 0 && qtyInCart > 0 && activePrice !== product.sellingPrice && (
+        {/* Active slab price hint (only when price isn't overridden) */}
+        {!override?.price && product.priceSlabs.length > 0 && qtyInCart > 0 && activePrice !== product.sellingPrice && (
           <p className="text-xs text-orange-600 font-medium mt-0.5">
-            Slab: ₹{fmtPrice(activePrice!)} for {fmtQty(qtyInCart)} {product.unit}
+            Slab: ₹{fmtPrice(activePrice!)} for {fmtQty(qtyInCart)} {effUnit}
           </p>
         )}
-        {/* Slab tiers when nothing in cart */}
-        {product.priceSlabs.length > 0 && qtyInCart === 0 && (
+        {/* Slab tiers when nothing in cart (only when price isn't overridden) */}
+        {!override?.price && product.priceSlabs.length > 0 && qtyInCart === 0 && (
           <p className="text-xs text-orange-400 mt-0.5">
             {product.priceSlabs.map((s, i) => (
               <span key={i} className="mr-2">
@@ -514,8 +519,11 @@ function ProductRow({
             ))}
           </p>
         )}
-        {product.category && (
-          <p className="text-xs text-orange-500 mt-0.5">{product.category}</p>
+        {(override?.category ?? product.category) && (
+          <p className="text-xs text-orange-500 mt-0.5">{override?.category ?? product.category}</p>
+        )}
+        {override && !overrideIsAllDefault(override) && (
+          <p className="text-xs text-orange-500 mt-0.5">✏ Edited for this bill</p>
         )}
       </div>
 
@@ -1530,6 +1538,7 @@ export default function CreateOrderPage() {
                   key={p.id}
                   product={p}
                   qtyInCart={cartQty[p.id!] ?? 0}
+                  override={cartOverrides[p.id!]}
                   onAdd={() => addToCart(p)}
                   onRemove={() => removeFromCart(p)}
                   onQtyTapped={() => setQtyDialogProduct(p)}
