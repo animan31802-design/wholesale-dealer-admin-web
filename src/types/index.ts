@@ -175,6 +175,8 @@ export interface Order {
   invoicedAt?: string;
   billingMode?: BillingMode;
   invoicedDue?: number;      // customer's previous outstanding due, frozen at the time this invoice was generated (or last regenerated) — needed to reproduce the "Previous Due" line when the invoice is re-viewed later
+  invoicedQrMode?: "with_amount" | "without_amount"; // QR mode frozen at generation time, so reopening reproduces the original invoice even if the business default changes later
+  invoicedPaperSize?: "a4" | "a5"; // paper size frozen at generation time, same reasoning as invoicedQrMode
   appliedCharges?: AppliedChargeDiscount[];  // charges/discounts applied at invoice time
   voidedInvoices?: Array<{ invoiceNumber: string; voidedAt: string; voidedBy: string; voidedByName: string }>;
   deliveryAttempts?: DeliveryAttempt[];  // history of every failed delivery attempt

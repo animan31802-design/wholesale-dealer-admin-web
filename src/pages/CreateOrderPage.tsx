@@ -1510,11 +1510,14 @@ export default function CreateOrderPage() {
                 {frequentProducts.map((p) => {
                   const avail    = availableQty(p);
                   const disabled = p.trackInventory && avail <= (cartQty[p.id!] ?? 0);
+                  const override = cartOverrides[p.id!];
+                  const effName  = override?.name ?? p.name;
+                  const effPrice = override?.price ?? getSlabPrice(p, 1);
                   return (
                     <button key={p.id} onClick={() => addToCart(p)} disabled={disabled}
                       className="bg-white border border-gray-100 rounded-xl p-2.5 text-left min-w-[110px] hover:border-orange-200 shadow-sm disabled:opacity-40 flex-shrink-0">
-                      <p className="text-xs font-medium text-gray-800 truncate max-w-[90px] sm:max-w-[120px]">{p.name}</p>
-                      <p className="text-xs text-gray-400">₹{fmtPrice(getSlabPrice(p, 1))}</p>
+                      <p className="text-xs font-medium text-gray-800 truncate max-w-[90px] sm:max-w-[120px]">{effName}</p>
+                      <p className="text-xs text-gray-400">₹{fmtPrice(effPrice)}</p>
                       {(cartQty[p.id!] ?? 0) > 0 && (
                         <p className="text-xs text-orange-500 mt-0.5">In cart: {fmtQty(cartQty[p.id!])}</p>
                       )}

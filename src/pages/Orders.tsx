@@ -793,8 +793,12 @@ function InvoiceModal({ order, onClose, isAdmin }: {
   // Invoice options — pre-filled from saved data if already invoiced
   const [invoiceType, setInvoiceType] = useState<InvoiceType>(order.invoiceType ?? "estimate");
   const [billingMode, setBillingMode] = useState<BillingMode>(order.billingMode ?? "without_due");
-  const [qrMode, setQrMode] = useState<"with_amount" | "without_amount">("without_amount");
-  const [paperSize, setPaperSize] = useState<"a4" | "a5">("a4");
+  const [qrMode, setQrMode] = useState<"with_amount" | "without_amount">(
+    hasInvoice ? ((order as any).invoicedQrMode ?? "without_amount") : "without_amount"
+  );
+  const [paperSize, setPaperSize] = useState<"a4" | "a5">(
+    hasInvoice ? ((order as any).invoicedPaperSize ?? "a4") : "a4"
+  );
   const [customerDue, setCustomerDue] = useState(
     hasInvoice && order.billingMode === "with_due" ? String((order as any).invoicedDue ?? 0) : ""
   );
@@ -881,9 +885,9 @@ function InvoiceModal({ order, onClose, isAdmin }: {
         if (!hasInvoice) {
           if (biz.defaultInvoiceType) setInvoiceType(biz.defaultInvoiceType);
           if (biz.defaultBillingMode) setBillingMode(biz.defaultBillingMode);
+          setQrMode(biz.defaultQrMode ?? "without_amount");
+          setPaperSize((biz as any).defaultPaperSize ?? "a4");
         }
-        setQrMode(biz.defaultQrMode ?? "without_amount");
-        setPaperSize((biz as any).defaultPaperSize ?? "a4");
         setChargeDiscountTypes((biz as any).chargeDiscountTypes ?? []);
       }
       setLoadingDefaults(false);
@@ -958,6 +962,8 @@ function InvoiceModal({ order, onClose, isAdmin }: {
         invoiceType,
         billingMode,
         invoicedDue: billingMode === "with_due" ? (parseFloat(customerDue) || 0) : 0,
+        invoicedQrMode: qrMode,
+        invoicedPaperSize: paperSize,
         invoicedAt: new Date().toISOString(),
         appliedCharges: selectedChargesArray,
       });
@@ -1001,6 +1007,8 @@ function InvoiceModal({ order, onClose, isAdmin }: {
         invoiceType,
         billingMode,
         invoicedDue:     billingMode === "with_due" ? (parseFloat(customerDue) || 0) : 0,
+        invoicedQrMode:     qrMode,
+        invoicedPaperSize:  paperSize,
         invoicedAt:      new Date().toISOString(),
         voidedInvoices:  [...existingVoided, voidedEntry],
         appliedCharges:  selectedChargesArray,

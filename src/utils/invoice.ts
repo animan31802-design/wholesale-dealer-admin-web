@@ -19,7 +19,7 @@ export interface InvoiceOptions {
 
 // ─── Firestore helpers ────────────────────────────────────────────────────────
 
-async function enrichItemsFromProducts(items: OrderItem[]): Promise<OrderItem[]> {
+async function enrichItemsFromProducts(items: OrderItem[]): Promise<(OrderItem & { _category?: string })[]> {
   try {
     const snap = await getDocs(collection(db, "products"));
     const productMap = new Map<string, Product>();
@@ -32,11 +32,29 @@ async function enrichItemsFromProducts(items: OrderItem[]): Promise<OrderItem[]>
         hsn:          item.hsn          || product.hsn          || "",
         gst:          item.gst          || (product.gst !== "none" ? product.gst : "0"),
         taxInclusive: item.taxInclusive ?? product.taxInclusive ?? false,
+        _category:    product.category || "",
       };
     });
   } catch {
     return items;
   }
+}
+
+// Group invoice line items by product category — NOT alphabetically, and the
+// category itself is never printed. Groups are ordered by each category's
+// first appearance in the input list; items keep their relative order within
+// a group. So e.g. "100g Product A", "100g Product B", "200g Product A"
+// (Product A / Product B being categories) becomes:
+//   100g Product A, 200g Product A, 100g Product B
+function groupItemsByCategory<T extends { _category?: string }>(items: T[]): T[] {
+  const order: string[] = [];
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const cat = item._category ?? "";
+    if (!groups.has(cat)) { groups.set(cat, []); order.push(cat); }
+    groups.get(cat)!.push(item);
+  }
+  return order.flatMap((cat) => groups.get(cat)!);
 }
 
 async function fetchBusinessSettings(): Promise<BusinessSettings | null> {
@@ -231,10 +249,14 @@ function buildPageStyles(scale: number, fs: (n: number) => string, bodyWidth: nu
     font-size:${fs(11)}; font-weight:700; text-align:center;
   }
   .cont-header{
-    font-size:${fs(10)}; text-align:right; padding:4px 6px;
-    border:1px solid #000; font-weight:600; color:#333;
+    font-size:${fs(11)}; padding:5px 8px;
+    border:1px solid #000; color:#333;
     margin-bottom:2px;
+    display:flex; align-items:center;
   }
+  .cont-header-spacer, .cont-header-invno{ flex:1; }
+  .cont-header-title{ flex:1; text-align:center; font-weight:700; }
+  .cont-header-invno{ text-align:right; font-weight:600; }
   `;
 }
 
@@ -320,7 +342,9 @@ function buildContinuationHTML(params: {
 
   <!-- CONTINUATION HEADER -->
   <div class="cont-header">
-    TAX INVOICE &nbsp;|&nbsp; Invoice No: ${invoiceNumber} &nbsp;|&nbsp; Page ${pageNum} of ${totalPages}
+    <span class="cont-header-spacer"></span>
+    <span class="cont-header-title">${isGST ? "TAX INVOICE" : "ESTIMATE"}</span>
+    <span class="cont-header-invno">Invoice No: ${invoiceNumber}</span>
   </div>
 
   <table>
@@ -339,6 +363,62 @@ function buildContinuationHTML(params: {
 </div>
 </body>
 </html>`;
+}
+
+// Builds a single continuation-page item row. Shared between the real render
+// loop and the pagination probes, so the probe's measured height always
+// matches exactly what gets rendered.
+function buildContinuationItemRow(
+  item: OrderItem,
+  globalIdx: number,
+  isGST: boolean,
+  isLastItem: boolean,
+  fs: (n: number) => string,
+  la: ReturnType<typeof computeLineAmounts>,
+): string {
+  const { taxableValue, lineCGST, lineSGST, lineTotal, gstPct } = la;
+  const cgstRate = gstPct / 2;
+  const lastCls = isLastItem ? " item-last" : "";
+
+  if (isGST) {
+    return `<tr class="item-row${lastCls}">
+      <td>${globalIdx + 1}</td>
+      <td colspan="2" style="text-align:left;padding-left:10px;">
+        <div>${item.productName}</div>
+        <div style="font-size:${fs(9)};color:#555;margin-top:2px;">₹${item.price.toFixed(2)} / ${item.unit}</div>
+      </td>
+      <td>${item.hsn || ""}</td>
+      <td>${item.quantity}</td>
+      <td>${item.unit}</td>
+      <td class="right">${taxableValue.toFixed(3)}</td>
+      <td>${gstPct > 0 ? `${cgstRate}%` : "0.0%"}</td>
+      <td class="right">${gstPct > 0 ? lineCGST.toFixed(3) : "0.000"}</td>
+      <td>${gstPct > 0 ? `${cgstRate}%` : "0.0%"}</td>
+      <td class="right">${gstPct > 0 ? lineSGST.toFixed(3) : "0.000"}</td>
+      <td class="right bold">${lineTotal.toFixed(2)}</td>
+    </tr>`;
+  } else {
+    return `<tr class="item-row${lastCls}">
+      <td>${globalIdx + 1}</td>
+      <td class="right">${item.price.toFixed(2)}</td>
+      <td style="text-align:left;padding-left:10px;">${item.productName}</td>
+      <td>${item.quantity}</td>
+      <td>${item.unit}</td>
+      <td class="right bold">${lineTotal.toFixed(2)}</td>
+    </tr>`;
+  }
+}
+
+// A single blank row, same visual height as an item row (fixed td padding),
+// used as a visual buffer between the last item and the totals/signature
+// block on the final page of a continuation bill. Built with one <td> per
+// column (matching the real item-row structure) so the vertical column
+// borders continue through it instead of being hidden behind one merged cell.
+function buildSpacerRow(isGST: boolean): string {
+  const cells = isGST
+    ? `<td>&nbsp;</td><td colspan="2">&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td>`
+    : `<td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td>`;
+  return `<tr class="item-row">${cells}</tr>`;
 }
 
 // ─── HTML invoice builder ─────────────────────────────────────────────────────
@@ -1125,10 +1205,11 @@ export async function buildInvoicePDF(
   options?: Partial<InvoiceOptions>,
   paperSize: "a4" | "a5" = "a4",
 ) {
-  const [enrichedItems, biz] = await Promise.all([
+  const [enrichedItemsRaw, biz] = await Promise.all([
     enrichItemsFromProducts(order.items),
     fetchBusinessSettings(),
   ]);
+  const enrichedItems = groupItemsByCategory(enrichedItemsRaw);
   const enrichedOrder = { ...order, items: enrichedItems };
 
   const invoiceType: InvoiceType = options?.invoiceType ?? biz?.defaultInvoiceType ?? "estimate";
@@ -1266,80 +1347,10 @@ export async function buildInvoicePDF(
 
   const totalItems = enrichedOrder.items.length;
 
-  // Render page 1 with NO items (just structure) to measure overhead
-  const probeOrder0 = { ...enrichedOrder, items: [] as any[] };
-  const probeHtml0 = buildInvoiceHTML({
-    order: probeOrder0 as any, customer, biz, invoiceNumber,
-    isGST, showDue, historicalDue, advancePaid, qrDataUrl,
-    paperSize, appliedCharges,
-  });
-
-  // Render page 1 with ONE item to measure one item row height
-  const probeOrder1 = { ...enrichedOrder, items: enrichedOrder.items.slice(0, 1) };
-  const probeHtml1 = buildInvoiceHTML({
-    order: probeOrder1 as any, customer, biz, invoiceNumber,
-    isGST, showDue, historicalDue, advancePaid, qrDataUrl,
-    paperSize, appliedCharges,
-  });
-
-  // Render both probes in parallel
-  const [probe0, probe1] = await Promise.all([
-    renderPageToDataUrl(probeHtml0),
-    renderPageToDataUrl(probeHtml1),
-  ]);
-
-  // Heights in canvas pixels (scale:2 so divide by 2 for CSS pixels)
-  const overheadH   = probe0.canvasH / 2;    // page 1 with 0 items
-  const oneItemH    = (probe1.canvasH - probe0.canvasH) / 2;  // delta = one row height
-  const page1BodyH  = paperH;                // available CSS px on page 1
-
-  // Continuation page overhead: just cont-header (≈24px) + col-headers (≈28px)
-  const contOverhead = Math.round(52 * scale);
-  const contBodyH    = paperH;
-
-  // Items that fit on page 1 (leave 8px breathing room)
-  const itemsOnPage1 = oneItemH > 0
-    ? Math.max(1, Math.floor((page1BodyH - overheadH - 8) / oneItemH))
-    : totalItems;
-
-  // Items per continuation page
-  const itemsPerContPage = oneItemH > 0
-    ? Math.max(1, Math.floor((contBodyH - contOverhead - 8) / oneItemH))
-    : totalItems;
-
-  // If everything fits on page 1 — classic single-page render
-  if (totalItems <= itemsOnPage1) {
-    const { dataUrl, canvasW, canvasH } = await renderPageToDataUrl(html);
-    const pdf  = new jsPDF({ unit: "mm", format: paperSize === "a5" ? "a5" : "a4", orientation: "portrait" });
-    const pdfW = pdf.internal.pageSize.getWidth();
-    const pdfH = pdf.internal.pageSize.getHeight();
-    const dataUrlFinal = dataUrl;
-    const ratio = pdfW / canvasW;
-    const imgH  = canvasH * ratio;
-    let heightLeft = imgH;
-    let position   = 0;
-    pdf.addImage(dataUrlFinal, "JPEG", 0, position, pdfW, imgH);
-    heightLeft -= pdfH;
-    while (heightLeft > 0.5) {
-      position -= pdfH; pdf.addPage();
-      pdf.addImage(dataUrlFinal, "JPEG", 0, position, pdfW, imgH);
-      heightLeft -= pdfH;
-    }
-    return { pdf, html };
-  }
-
-  // ── Multi-page: split items into batches ─────────────────────────────────────
-  const batches: typeof enrichedOrder.items[] = [];
-  batches.push(enrichedOrder.items.slice(0, itemsOnPage1));
-  let offset = itemsOnPage1;
-  while (offset < totalItems) {
-    batches.push(enrichedOrder.items.slice(offset, offset + itemsPerContPage));
-    offset += itemsPerContPage;
-  }
-  const totalPages = batches.length;
-
   // ── Pre-build the summary/totals/signature/footer block for the last page ────
-  // We reuse the same summary row helpers from buildInvoiceHTML by duplicating the logic here
+  // We reuse the same summary row helpers from buildInvoiceHTML by duplicating the logic here.
+  // Built here (before the page-fit probes below) so we can measure its real
+  // rendered height in the continuation-page layout, instead of guessing.
   const lineAmounts    = enrichedOrder.items.map((item) => computeLineAmounts(item, isGST));
   const totalTaxable   = round3(lineAmounts.reduce((s, a) => s + a.taxableValue, 0));
   const totalCGST      = round3(lineAmounts.reduce((s, a) => s + a.lineCGST,    0));
@@ -1437,6 +1448,46 @@ export async function buildInvoicePDF(
     </td>
   </tr>`;
 
+  // ── Pagination rule: fixed item count per page ────────────────────────────────
+  // A4 = 15 items/page, A5 = 10 items/page. Deterministic — no height measurement.
+  const itemsPerPage = paperSize === "a5" ? 10 : 15;
+
+  // Number of blank spacer rows inserted after the items on the FINAL page,
+  // before the totals/signature/footer block — purely a visual buffer so the
+  // summary doesn't sit crammed directly under the last item row.
+  const SPACER_ROWS = 4;
+
+  // If everything fits within one page's item cap — classic single-page render
+  // (items + summary together on page 1, same as a normal short bill)
+  if (totalItems <= itemsPerPage) {
+    const { dataUrl, canvasW, canvasH } = await renderPageToDataUrl(html);
+    const pdf  = new jsPDF({ unit: "mm", format: paperSize === "a5" ? "a5" : "a4", orientation: "portrait" });
+    const pdfW = pdf.internal.pageSize.getWidth();
+    const pdfH = pdf.internal.pageSize.getHeight();
+    const dataUrlFinal = dataUrl;
+    const ratio = pdfW / canvasW;
+    const imgH  = canvasH * ratio;
+    let heightLeft = imgH;
+    let position   = 0;
+    pdf.addImage(dataUrlFinal, "JPEG", 0, position, pdfW, imgH);
+    heightLeft -= pdfH;
+    while (heightLeft > 0.5) {
+      position -= pdfH; pdf.addPage();
+      pdf.addImage(dataUrlFinal, "JPEG", 0, position, pdfW, imgH);
+      heightLeft -= pdfH;
+    }
+    return { pdf, html };
+  }
+
+  // ── Multi-page: split items into fixed-size batches ───────────────────────────
+  const batches: typeof enrichedOrder.items[] = [];
+  let offset = 0;
+  while (offset < totalItems) {
+    batches.push(enrichedOrder.items.slice(offset, offset + itemsPerPage));
+    offset += itemsPerPage;
+  }
+  const totalPages = batches.length;
+
   // ── Build and render each page ───────────────────────────────────────────────
   const pdf = new jsPDF({ unit: "mm", format: paperSize === "a5" ? "a5" : "a4", orientation: "portrait" });
   const pdfW = pdf.internal.pageSize.getWidth();
@@ -1457,7 +1508,12 @@ export async function buildInvoicePDF(
         isGST, showDue: isLastPage ? showDue : false,
         historicalDue: isLastPage ? historicalDue : 0,
         advancePaid:   isLastPage ? advancePaid : 0,
-        qrDataUrl:     isLastPage ? qrDataUrl : "",
+        // QR is precomputed once for the whole order (not dependent on which
+        // page is "last"), so it should always show on page 1 — it was being
+        // wrongly withheld here whenever page 1 wasn't also the last page,
+        // which is every genuine multi-page bill. That's why QR never
+        // appeared on continuation bills.
+        qrDataUrl,
         paperSize,
         appliedCharges: isLastPage ? appliedCharges : undefined,
         // Override: suppress totals/summary on page 1 if not last page
@@ -1468,38 +1524,12 @@ export async function buildInvoicePDF(
       const itemRowsHtml = pageItems.map((item, localIdx) => {
         const globalIdx = batches.slice(0, pageIdx).reduce((s, b) => s + b.length, 0) + localIdx;
         const la = lineAmounts[globalIdx];
-        const { taxableValue, lineCGST, lineSGST, lineTotal, gstPct } = la;
-        const cgstRate = gstPct / 2;
         const isLastItem = localIdx === pageItems.length - 1 && !isLastPage;
-
-        if (isGST) {
-          return `<tr class="item-row${isLastItem ? " item-last" : ""}">
-            <td>${globalIdx + 1}</td>
-            <td colspan="2" style="text-align:left;padding-left:10px;">
-              <div>${item.productName}</div>
-              <div style="font-size:${fs(9)};color:#555;margin-top:2px;">₹${item.price.toFixed(2)} / ${item.unit}</div>
-            </td>
-            <td>${item.hsn || ""}</td>
-            <td>${item.quantity}</td>
-            <td>${item.unit}</td>
-            <td class="right">${taxableValue.toFixed(3)}</td>
-            <td>${gstPct > 0 ? `${cgstRate}%` : "0.0%"}</td>
-            <td class="right">${gstPct > 0 ? lineCGST.toFixed(3) : "0.000"}</td>
-            <td>${gstPct > 0 ? `${cgstRate}%` : "0.0%"}</td>
-            <td class="right">${gstPct > 0 ? lineSGST.toFixed(3) : "0.000"}</td>
-            <td class="right bold">${lineTotal.toFixed(2)}</td>
-          </tr>`;
-        } else {
-          return `<tr class="item-row${isLastItem ? " item-last" : ""}">
-            <td>${globalIdx + 1}</td>
-            <td class="right">${item.price.toFixed(2)}</td>
-            <td style="text-align:left;padding-left:10px;">${item.productName}</td>
-            <td>${item.quantity}</td>
-            <td>${item.unit}</td>
-            <td class="right bold">${lineTotal.toFixed(2)}</td>
-          </tr>`;
-        }
-      }).join("");
+        return buildContinuationItemRow(item, globalIdx, isGST, isLastItem, fs, la);
+      }).join("")
+      // On the final page, add a few blank rows before the totals/signature
+      // block so it doesn't sit crammed directly under the last item.
+      + (isLastPage ? Array(SPACER_ROWS).fill(buildSpacerRow(isGST)).join("") : "");
 
       pageHtml = buildContinuationHTML({
         pageNum: pageIdx + 1,
@@ -1534,6 +1564,16 @@ export async function buildInvoicePDF(
       position -= pdfH; pdf.addPage();
       pdf.addImage(dataUrl, "JPEG", 0, position, pdfW, imgH);
       heightLeft -= pdfH;
+    }
+
+    // Page number at the bottom of the sheet (only relevant for continuation
+    // bills) — drawn directly on the PDF so it always sits at the true bottom
+    // of the physical page, regardless of how much whitespace is left below
+    // the actual content (e.g. a short page 1 in an otherwise multi-page bill).
+    if (totalPages > 1) {
+      pdf.setFontSize(8);
+      pdf.setTextColor(80, 80, 80);
+      pdf.text(`Page ${pageIdx + 1} of ${totalPages}`, pdfW / 2, pdfH - 6, { align: "center" });
     }
   }
 
