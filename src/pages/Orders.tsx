@@ -1180,6 +1180,23 @@ function InvoiceModal({ order, onClose, isAdmin }: {
                 </div>
               </div>
 
+              {/* Paper size */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Paper Size</label>
+                <div className="grid grid-cols-2 gap-3">
+                  {(["a4", "a5"] as const).map((size) => (
+                    <button key={size} type="button" onClick={() => setPaperSize(size)}
+                      className={`p-3 rounded-xl border-2 text-left transition-all ${
+                        paperSize === size ? "border-orange-500 bg-orange-50" : "border-gray-200 hover:border-gray-300"
+                      }`}>
+                      <p className="font-semibold text-sm">{size.toUpperCase()}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{size === "a4" ? "210 × 297 mm" : "148 × 210 mm"}</p>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-400 mt-1">Can still be switched after generating, from the preview screen.</p>
+              </div>
+
               {/* Charges & Discounts */}
               <ChargesDiscountsPicker
                 chargeDiscountTypes={chargeDiscountTypes}
@@ -1283,6 +1300,22 @@ function InvoiceModal({ order, onClose, isAdmin }: {
                 </div>
               </div>
 
+              {/* Paper size */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Paper Size</label>
+                <div className="grid grid-cols-2 gap-3">
+                  {(["a4", "a5"] as const).map((size) => (
+                    <button key={size} type="button" onClick={() => setPaperSize(size)}
+                      className={`p-3 rounded-xl border-2 text-left transition-all ${
+                        paperSize === size ? "border-orange-500 bg-orange-50" : "border-gray-200 hover:border-gray-300"
+                      }`}>
+                      <p className="font-semibold text-sm">{size.toUpperCase()}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{size === "a4" ? "210 × 297 mm" : "148 × 210 mm"}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* Charges & Discounts */}
               <ChargesDiscountsPicker
                 chargeDiscountTypes={chargeDiscountTypes}
@@ -1344,7 +1377,10 @@ function InvoiceModal({ order, onClose, isAdmin }: {
               )}
             </div>
             <div className="flex gap-2 p-4 border-t border-gray-100 flex-shrink-0 flex-wrap">
-              {/* Paper size toggle — changing it re-renders the PDF */}
+              {/* Paper size toggle — changing it re-renders the PDF AND persists
+                  the choice back to the order, so reopening this invoice later
+                  remembers it instead of reverting to whatever was saved at
+                  generation time. */}
               <div className="w-full flex items-center gap-2">
                 <span className="text-xs text-gray-500 font-medium">Paper:</span>
                 {(["a4", "a5"] as const).map((size) => (
@@ -1353,6 +1389,9 @@ function InvoiceModal({ order, onClose, isAdmin }: {
                     onClick={async () => {
                       setPaperSize(size);
                       await renderPdf(invoiceNumber, invoiceType, billingMode, qrMode, size);
+                      if (order.id) {
+                        updateDoc(doc(db, "orders", order.id), { invoicedPaperSize: size }).catch(() => {});
+                      }
                     }}
                     className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-all ${
                       paperSize === size
