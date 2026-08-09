@@ -27,6 +27,9 @@ export interface BusinessSettings {
   defaultQrMode: "with_amount" | "without_amount";
   defaultPaperSize: "a4" | "a5";
   chargeDiscountTypes?: ChargeDiscountType[];
+  // Hours a minimized/floating billing draft is kept before it's considered
+  // stale (greyed out) and eventually auto-discarded. Configurable per business.
+  draftBillExpiryHours?: number;
 }
 
 const EMPTY: BusinessSettings = {
@@ -38,6 +41,7 @@ const EMPTY: BusinessSettings = {
   defaultInvoiceType: "estimate", defaultBillingMode: "without_due",
   defaultQrMode: "without_amount", defaultPaperSize: "a4",
   chargeDiscountTypes: [],
+  draftBillExpiryHours: 3,
 };
 
 export async function getBusinessSettings(): Promise<BusinessSettings> {
@@ -76,7 +80,11 @@ export default function Settings() {
       getBusinessSettings(),
       getDoc(doc(db, "settings", "workCalendar")),
     ]).then(([data, calSnap]) => {
-      setForm({ ...data, chargeDiscountTypes: data.chargeDiscountTypes ?? [] });
+      setForm({
+        ...data,
+        chargeDiscountTypes: data.chargeDiscountTypes ?? [],
+        draftBillExpiryHours: data.draftBillExpiryHours ?? 3,
+      });
       if (calSnap.exists()) setCalendar(calSnap.data() as WorkCalendar);
       setLoading(false);
       if (data.upiId) generateQRs(data.upiId);
@@ -347,6 +355,30 @@ export default function Settings() {
             <Field label="Invoice Footer Message" span={2}>
               <input value={form.invoiceFooter} onChange={e => set("invoiceFooter", e.target.value)}
                 placeholder="Thank you for your business!" maxLength={100} className={inp} />
+            </Field>
+          </div>
+        </Section>
+
+        {/* ── Minimized Billing Drafts ─────────────────────────────────── */}
+        <Section title="Minimized Billing Drafts">
+          <p className="text-xs text-gray-400 mb-4">
+            When an agent minimizes an in-progress bill (the floating bubble on the Create Order
+            screen), it's kept for this long before it's considered stale and eventually discarded.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Field label="Keep minimized drafts for (hours)">
+              <input
+                type="number"
+                min={1}
+                max={72}
+                value={form.draftBillExpiryHours ?? 3}
+                onChange={e => {
+                  const n = parseInt(e.target.value, 10);
+                  setForm(f => ({ ...f, draftBillExpiryHours: isNaN(n) ? 3 : Math.max(1, Math.min(72, n)) }));
+                }}
+                className={inp}
+              />
+              <p className="text-xs text-gray-400 mt-1">Default is 3 hours. Applies to all agents.</p>
             </Field>
           </div>
         </Section>

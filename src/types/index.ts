@@ -81,6 +81,18 @@ export interface Product {
   updatedAt?: string;
 }
 
+// ── Per-bill product overrides ───────────────────────────────────
+// Lets a field agent fix a product's name, price, unit, GST%, category, or
+// fractional-sale setting without leaving the "add to cart" flow.
+export interface OrderItemOverride {
+  name?: string;
+  price?: number;
+  unit?: ProductUnit;
+  gst?: GSTRate;
+  category?: string;
+  sellInFraction?: boolean;
+}
+
 export interface OrderItem {
   productId: string;
   productName: string;

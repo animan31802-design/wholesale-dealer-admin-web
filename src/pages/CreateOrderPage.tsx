@@ -4,11 +4,12 @@ import {
   doc, runTransaction, onSnapshot, setDoc, getDoc, increment, updateDoc,
 } from "firebase/firestore";
 import { db } from "../firebase/config";
-import { Customer, Product, Order, OrderItem, GSTRate, ProductUnit } from "../types";
+import { Customer, Product, Order, OrderItem, GSTRate, ProductUnit, OrderItemOverride } from "../types";
 import { useAuthStore } from "../store/authStore";
 import { useModalKeyboard } from "../hooks/useModalKeyboard";
 import { useTamilSearch } from "../utils/UseTamilSearch";
 import { TamilSearchInput } from "../components/TamilSearchInput";
+import { useBillingDraftsStore, BillDraft, PaymentMode } from "../store/billingDraftsStore";
 
 // ─── Helpers ──────────────────────────────────────────────────────
 
@@ -62,16 +63,8 @@ function fmtRupees(v: number): string { return `₹${fmtPrice(v)}`; }
 // Lets a field agent fix a product's name, price, unit, GST%, category, or
 // fractional-sale setting without leaving the "add to cart" flow.
 // Changes can be applied to this bill only (in-memory) or saved back to
-// the master catalogue. Intentionally NOT persisted to draftStore — draft
-// restore always uses current catalogue data.
-interface OrderItemOverride {
-  name?: string;
-  price?: number;
-  unit?: ProductUnit;
-  gst?: GSTRate;
-  category?: string;
-  sellInFraction?: boolean;
-}
+// the master catalogue. An overridden field is treated as intentional and
+// is never overwritten by a catalogue-change warning on resume.
 function overrideIsAllDefault(o: OrderItemOverride): boolean {
   return o.name === undefined && o.price === undefined && o.unit === undefined &&
     o.gst === undefined && o.category === undefined && o.sellInFraction === undefined;
@@ -143,8 +136,12 @@ function openWhatsApp(phone: string, message: string): void {
   window.open(url, "_blank");
 }
 
-// Module-level draft store — survives re-renders, cleared on order save
-const draftStore: Record<string, Record<string, number>> = {};
+// NOTE: in-progress bills ("drafts") used to live in a module-level object
+// here (draftQty only, lost on navigation/refresh). That's been replaced by
+// the persisted `useBillingDraftsStore` (src/store/billingDraftsStore.ts),
+// which holds the FULL bill snapshot (cart, overrides, payment, notes) and
+// survives navigating away, refreshing, and closing the tab — and powers
+// the floating "minimized bill" bubbles shown app-wide in Layout.
 
 // ─── Qty Dialog ───────────────────────────────────────────────────
 
@@ -432,15 +429,15 @@ function BackDraftDialog({
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
       <div className="bg-white rounded-2xl p-6 w-80 shadow-2xl">
-        <p className="font-semibold text-gray-800 mb-2">Save cart as draft?</p>
+        <p className="font-semibold text-gray-800 mb-2">Save &amp; minimize this bill?</p>
         <p className="text-sm text-gray-500 mb-5 leading-relaxed">
           You have items in the cart for <strong>{customerName}</strong>.{" "}
-          Save as draft to continue this bill later?
+          Save it and it'll show up as a floating bubble so you can continue it later.
         </p>
         <div className="flex flex-col gap-2">
           <button onClick={onSave}
             className="w-full bg-orange-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-orange-600">
-            Save Draft
+            Save &amp; Minimize
           </button>
           <button onClick={onDiscard}
             className="w-full border border-red-200 text-red-500 py-2.5 rounded-xl text-sm hover:bg-red-50">
@@ -668,11 +665,25 @@ export default function CreateOrderPage() {
   const [sortMode, setSortMode]                 = useState<"frequent"|"name">("frequent");
   const [qtyDialogProduct, setQtyDialogProduct] = useState<Product | null>(null);
   // Per-bill field overrides — productId → OrderItemOverride.
-  // Intentionally NOT persisted in draftStore; draft restore always uses catalogue data.
+  // Persisted as part of the bill snapshot in useBillingDraftsStore so a
+  // minimized/resumed bill keeps them; a diff-warning never touches a
+  // field the agent has already overridden here.
   const [cartOverrides, setCartOverrides] = useState<Record<string, OrderItemOverride>>({});
   const [productEditTarget, setProductEditTarget] = useState<Product | null>(null);
   const [showBackDialog, setShowBackDialog]     = useState(false);
+  const [showCloseDialog, setShowCloseDialog]   = useState(false);
   const [draftWarnings, setDraftWarnings]       = useState<string[]>([]);
+
+  // ── Minimized-bill store bindings ─────────────────────────────────
+  const drafts           = useBillingDraftsStore((s) => s.drafts);
+  const saveDraft         = useBillingDraftsStore((s) => s.saveDraft);
+  const removeDraftFromStore = useBillingDraftsStore((s) => s.removeDraft);
+  const setActiveCustomerId = useBillingDraftsStore((s) => s.setActiveCustomerId);
+  const setHasUnsavedActiveBill = useBillingDraftsStore((s) => s.setHasUnsavedActiveBill);
+  const registerExitHandlers = useBillingDraftsStore((s) => s.registerExitHandlers);
+  const resumeCustomerId  = useBillingDraftsStore((s) => s.resumeCustomerId);
+  const resumeToken       = useBillingDraftsStore((s) => s.resumeToken);
+  const clearResumeRequest = useBillingDraftsStore((s) => s.clearResumeRequest);
 
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -1113,7 +1124,7 @@ export default function CreateOrderPage() {
       });
 
       // Success
-      delete draftStore[customer.id!];
+      removeDraftFromStore(customer.id!);
       setLastOrderId(newOrderNo);  // show human-readable ref in success toast
 
       // ── Sync field agent cash ledger ──────────────────────────────
@@ -1198,14 +1209,101 @@ export default function CreateOrderPage() {
     setSortMode("frequent");
     setPaidAmount("");
     setNotes("");
+    setCartQty({});
+    setCartOverrides({});
     setDraftWarnings([]);
+    setActiveCustomerId(null);
+    setHasUnsavedActiveBill(false);
     // selectedRegion intentionally NOT reset — agent stays on current region
     // between orders so they can bill all shops in one area without re-selecting
   };
 
+  // Snapshot the catalogue values of everything currently in the cart —
+  // compared against live catalogue data on resume to warn about drift.
+  const buildProductSnapshot = useCallback((): BillDraft["productSnapshot"] => {
+    const snap: BillDraft["productSnapshot"] = {};
+    Object.keys(cartQty).forEach((pid) => {
+      const p = products.find((x) => x.id === pid);
+      if (p) snap[pid] = { name: p.name, price: p.sellingPrice, gst: p.gst, taxInclusive: p.taxInclusive };
+    });
+    return snap;
+  }, [cartQty, products]);
+
+  // Save the bill currently on screen into the persisted draft store — this
+  // is what spawns/refreshes its floating bubble.
+  const saveCurrentAsDraft = useCallback(() => {
+    if (!customer?.id) return;
+    saveDraft(customer.id, {
+      customer,
+      cartQty: { ...cartQty },
+      cartOverrides: { ...cartOverrides },
+      paidAmount,
+      paymentMode,
+      notes,
+      selectedRegion,
+      productSnapshot: buildProductSnapshot(),
+      lastKnownTotal: grandTotal,
+    });
+  }, [customer, cartQty, cartOverrides, paidAmount, paymentMode, notes, selectedRegion, buildProductSnapshot, grandTotal, saveDraft]);
+
+  // Restore a saved draft into local state — validates stock (as before) AND
+  // now diffs price / GST / tax-mode against the live catalogue, skipping
+  // any field the agent already overrode for this specific bill.
+  const applyDraft = useCallback((draft: BillDraft) => {
+    const warnings: string[] = [];
+    const restoredQty: Record<string, number> = {};
+
+    Object.entries(draft.cartQty).forEach(([pid, qty]) => {
+      const p = products.find((x) => x.id === pid);
+      if (!p) { warnings.push("⚠ A product was removed from catalogue"); return; }
+
+      if (p.trackInventory) {
+        const avail = availableQty(p);
+        if (avail <= 0) { warnings.push(`⚠ "${p.name}" removed from draft — out of stock`); return; }
+        if (qty > avail) {
+          restoredQty[pid] = avail;
+          warnings.push(`⚠ "${p.name}" qty reduced ${fmtQty(qty)}→${fmtQty(avail)} (stock limit)`);
+        } else {
+          restoredQty[pid] = qty;
+        }
+      } else {
+        restoredQty[pid] = qty;
+      }
+
+      const override = draft.cartOverrides?.[pid];
+      const before    = draft.productSnapshot?.[pid];
+      if (before) {
+        if (override?.price === undefined && before.price !== p.sellingPrice) {
+          warnings.push(`💰 "${p.name}" price changed ₹${fmtPrice(before.price)} → ₹${fmtPrice(p.sellingPrice)} since you minimized this bill`);
+        }
+        if (override?.gst === undefined && before.gst !== p.gst) {
+          warnings.push(`📋 "${p.name}" GST rate changed since you minimized this bill`);
+        }
+        if ((before.taxInclusive ?? false) !== (p.taxInclusive ?? false)) {
+          warnings.push(`📋 "${p.name}" tax mode (inclusive/exclusive) changed since you minimized this bill`);
+        }
+      }
+    });
+
+    setCustomer(draft.customer);
+    setCartQty(restoredQty);
+    setCartOverrides(draft.cartOverrides ?? {});
+    setPaidAmount(draft.paidAmount ?? "");
+    setPaymentMode(draft.paymentMode ?? "cash");
+    setNotes(draft.notes ?? "");
+    setStep("billing");
+    setView("products");
+    setSearchQuery("");
+    setSelectedCategory("All");
+    setSortMode("frequent");
+    setMessage("");
+    setDraftWarnings(warnings);
+    setActiveCustomerId(draft.customer.id ?? null);
+  }, [products, setActiveCustomerId]);
+
   const handleBack = () => {
     if (Object.keys(cartQty).length === 0) {
-      delete draftStore[customer?.id ?? ""];
+      if (customer?.id) removeDraftFromStore(customer.id);
       resetBilling();
     } else {
       setShowBackDialog(true);
@@ -1213,24 +1311,46 @@ export default function CreateOrderPage() {
   };
 
   const handleSaveDraft = () => {
-    if (customer) draftStore[customer.id!] = { ...cartQty };
+    saveCurrentAsDraft();
     setShowBackDialog(false);
-    setCartQty({});
+    resetBilling();
+  };
+
+  // Explicit "minimize" button (top-right of the billing header). Always
+  // available — even an empty cart can be minimized, per product decision —
+  // so the agent can hold a customer's slot open without committing to items yet.
+  const handleMinimize = () => {
+    if (customer) saveCurrentAsDraft();
+    resetBilling();
+  };
+
+  // Explicit "close" button (top-right, ✕) — ends the billing after a
+  // confirmation, discarding any draft for this customer.
+  const handleConfirmClose = () => {
+    if (customer?.id) removeDraftFromStore(customer.id);
+    setShowCloseDialog(false);
     resetBilling();
   };
 
   const handleSelectCustomer = (c: Customer) => {
-    // FIX (INFO): Save current customer's cart as draft before switching, then
-    // clear cartQty so stale quantities never bleed into a different customer's order.
+    // Save the current customer's bill as a draft before switching, so it
+    // becomes a floating bubble instead of being silently lost.
     if (customer && customer.id !== c.id) {
-      if (Object.keys(cartQty).length > 0) {
-        draftStore[customer.id!] = { ...cartQty };
-      } else {
-        delete draftStore[customer.id!];
-      }
-      setCartQty({});
+      if (Object.keys(cartQty).length > 0) saveCurrentAsDraft();
+      else if (customer.id) removeDraftFromStore(customer.id);
     }
+
+    // Per product decision: picking a customer who already has a minimized
+    // draft always resumes that exact draft — never starts a fresh cart.
+    const existingDraft = drafts[c.id!];
+    if (existingDraft) {
+      applyDraft(existingDraft);
+      return;
+    }
+
     setCustomer(c);
+    setCartQty({});
+    setCartOverrides({});
     setStep("billing");
     setView("products");
     setSearchQuery("");
@@ -1240,33 +1360,79 @@ export default function CreateOrderPage() {
     setNotes("");
     setMessage("");
     setDraftWarnings([]);
-
-    // Restore draft with live stock validation
-    const draft = draftStore[c.id!];
-    if (draft && Object.keys(draft).length > 0) {
-      const warnings: string[] = [];
-      const restored: Record<string, number> = {};
-
-      Object.entries(draft).forEach(([pid, qty]) => {
-        const p = products.find((x) => x.id === pid);
-        if (!p) { warnings.push("⚠ A product was removed from catalogue"); return; }
-        if (!p.trackInventory) { restored[pid] = qty; return; }
-        const avail = availableQty(p);
-        if (avail <= 0) { warnings.push(`⚠ "${p.name}" removed from draft — out of stock`); return; }
-        if (qty > avail) {
-          restored[pid] = avail;
-          warnings.push(`⚠ "${p.name}" qty reduced ${fmtQty(qty)}→${fmtQty(avail)} (stock limit)`);
-          return;
-        }
-        restored[pid] = qty;
-      });
-
-      setCartQty(restored);
-      setDraftWarnings(warnings);
-    } else {
-      setCartQty({});
-    }
+    setActiveCustomerId(c.id ?? null);
   };
+
+  // ── Resume a bill from a floating bubble ──────────────────────────
+  // Bubble clicks (from anywhere in the app, via Layout) set resumeCustomerId;
+  // this fires whether or not CreateOrderPage was already mounted/open.
+  useEffect(() => {
+    if (!resumeCustomerId) return;
+    const target = drafts[resumeCustomerId];
+    if (target) {
+      // If a different bill is currently open with items, save it first so
+      // switching bubbles never silently loses work.
+      if (customer && customer.id !== resumeCustomerId && Object.keys(cartQty).length > 0) {
+        saveCurrentAsDraft();
+      }
+      applyDraft(target);
+    }
+    clearResumeRequest();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resumeToken]);
+
+  // ── Keep the "has an unsaved bill open" flag in sync ───────────────
+  // Layout uses this to decide whether to intercept sidebar navigation.
+  useEffect(() => {
+    setHasUnsavedActiveBill(step === "billing" && Object.keys(cartQty).length > 0);
+  }, [step, cartQty, setHasUnsavedActiveBill]);
+
+  // ── Register handlers Layout's "leave unsaved bill?" dialog calls ──
+  useEffect(() => {
+    registerExitHandlers({
+      onDiscard: () => {
+        if (customer?.id) removeDraftFromStore(customer.id);
+        resetBilling();
+      },
+      onSaveAndMinimize: () => {
+        saveCurrentAsDraft();
+        resetBilling();
+      },
+    });
+    return () => registerExitHandlers(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customer, cartQty, cartOverrides, paidAmount, paymentMode, notes, selectedRegion]);
+
+  // ── Safety net for exits we can't intercept (browser back/forward, tab
+  // close) — silently save-and-minimize on unmount so nothing is lost even
+  // without the confirmation dialog. Reads a ref so it always sees the
+  // latest values, regardless of when React tears the component down.
+  const latestBillRef = useRef({
+    step, customer, cartQty, cartOverrides, paidAmount, paymentMode, notes, selectedRegion, grandTotal: 0 as number,
+  });
+  useEffect(() => {
+    latestBillRef.current = { step, customer, cartQty, cartOverrides, paidAmount, paymentMode, notes, selectedRegion, grandTotal };
+  });
+  useEffect(() => {
+    return () => {
+      const s = latestBillRef.current;
+      if (s.step === "billing" && s.customer?.id && Object.keys(s.cartQty).length > 0) {
+        useBillingDraftsStore.getState().saveDraft(s.customer.id, {
+          customer: s.customer,
+          cartQty: { ...s.cartQty },
+          cartOverrides: { ...s.cartOverrides },
+          paidAmount: s.paidAmount,
+          paymentMode: s.paymentMode,
+          notes: s.notes,
+          selectedRegion: s.selectedRegion,
+          productSnapshot: {}, // best-effort on an implicit exit — diffed again fully on next explicit save
+          lastKnownTotal: s.grandTotal,
+        });
+      }
+      useBillingDraftsStore.getState().setActiveCustomerId(null);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // filteredCustomers: Tamil search results further narrowed by selected region chip
   const filteredCustomers = useMemo(() => {
@@ -1390,8 +1556,8 @@ export default function CreateOrderPage() {
                     {(c.outstandingDue ?? 0) > 0 && (
                       <p className="text-xs font-semibold text-red-500">Due: ₹{fmtPrice(c.outstandingDue!)}</p>
                     )}
-                    {draftStore[c.id!] && Object.keys(draftStore[c.id!] ?? {}).length > 0 && (
-                      <p className="text-xs text-orange-500 mt-1">📋 Draft saved</p>
+                    {drafts[c.id!] && Object.keys(drafts[c.id!].cartQty ?? {}).length > 0 && (
+                      <p className="text-xs text-orange-500 mt-1">📋 Draft saved — tap to resume</p>
                     )}
                   </div>
                 </div>
@@ -1437,6 +1603,24 @@ export default function CreateOrderPage() {
               </span>
             )}
           </button>
+
+          {/* Minimize / Close — top-right, always available */}
+          <button
+            onClick={handleMinimize}
+            title="Minimize this bill"
+            className="w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 flex-shrink-0"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 12h12" />
+            </svg>
+          </button>
+          <button
+            onClick={() => setShowCloseDialog(true)}
+            title="Close this billing"
+            className="w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 text-gray-600 hover:bg-red-50 hover:text-red-600 flex-shrink-0"
+          >
+            ✕
+          </button>
         </div>
       </div>
 
@@ -1448,11 +1632,6 @@ export default function CreateOrderPage() {
             {draftWarnings.map((w, i) => <p key={i} className="text-xs text-red-500">{w}</p>)}
           </div>
           <button onClick={() => setDraftWarnings([])} className="text-red-400 hover:text-red-600">✕</button>
-        </div>
-      )}
-      {draftWarnings.length === 0 && customer && draftStore[customer.id!] && cartCount > 0 && (
-        <div className="bg-green-50 border-b border-green-100 px-4 py-2">
-          <p className="text-xs text-green-600 max-w-3xl mx-auto">📋 Draft restored — prices updated to current rates</p>
         </div>
       )}
       {message && (
@@ -1740,13 +1919,35 @@ export default function CreateOrderPage() {
           customerName={customer.shopName}
           onSave={handleSaveDraft}
           onDiscard={() => {
-            delete draftStore[customer.id!];
+            if (customer.id) removeDraftFromStore(customer.id);
             setShowBackDialog(false);
-            setCartQty({});
             resetBilling();
           }}
           onCancel={() => setShowBackDialog(false)}
         />
+      )}
+
+      {/* ── Close-billing confirmation ── */}
+      {showCloseDialog && customer && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
+          <div className="bg-white rounded-2xl p-6 w-80 shadow-2xl">
+            <p className="font-semibold text-gray-800 mb-2">Close this billing?</p>
+            <p className="text-sm text-gray-500 mb-5 leading-relaxed">
+              This will end the bill for <strong>{customer.shopName}</strong> and discard everything
+              in it — this can't be undone.
+            </p>
+            <div className="flex flex-col gap-2">
+              <button onClick={handleConfirmClose}
+                className="w-full bg-red-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-red-600">
+                Yes, close &amp; discard
+              </button>
+              <button onClick={() => setShowCloseDialog(false)}
+                className="w-full text-gray-400 py-2 text-sm hover:text-gray-600">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── Qty dialog ── */}

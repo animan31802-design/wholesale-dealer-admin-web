@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Outlet, NavLink, useNavigate } from "react-router-dom";
+import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebase/config";
 import { useAuthStore } from "../store/authStore";
@@ -7,6 +7,8 @@ import { collection, getDocs, query, orderBy } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Customer } from "../types";
 import { getOverdueCustomers } from "../utils/ledger";
+import { useBillingDraftsStore } from "../store/billingDraftsStore";
+import BillingBubbles from "./BillingBubbles";
 
 type NavItem = {
   path?: string;
@@ -87,6 +89,33 @@ const packingNavItems: NavItem[] = [
 export default function Layout() {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // ── Minimized-billing nav guard ───────────────────────────────
+  // If the agent has an in-progress bill with items open on /create-order
+  // and clicks away to another screen without explicitly minimizing/closing
+  // it first, intercept the click and ask what to do with it.
+  const hasUnsavedActiveBill = useBillingDraftsStore((s) => s.hasUnsavedActiveBill);
+  const exitHandlers = useBillingDraftsStore((s) => s.exitHandlers);
+  const [pendingNavTo, setPendingNavTo] = useState<string | null>(null);
+
+  const handleNavClick = (e: React.MouseEvent, path: string) => {
+    if (location.pathname === "/create-order" && hasUnsavedActiveBill && path !== "/create-order") {
+      e.preventDefault();
+      setPendingNavTo(path);
+      return;
+    }
+    setSidebarOpen(false);
+  };
+
+  const resolvePendingNav = (action: "discard" | "save") => {
+    const to = pendingNavTo;
+    setPendingNavTo(null);
+    setSidebarOpen(false);
+    if (action === "discard") exitHandlers?.onDiscard();
+    else exitHandlers?.onSaveAndMinimize();
+    if (to) navigate(to);
+  };
 
   const isPackingStaff = user?.role === "packing_staff";
   const isAdmin = user?.role === "admin";
@@ -149,7 +178,7 @@ export default function Layout() {
                   <div className="ml-4 mt-1 space-y-1 border-l border-gray-700 pl-3">
                     {item.children.map((child) => (
                       <NavLink key={child.path} to={child.path!}
-                        onClick={() => setSidebarOpen(false)}
+                        onClick={(e) => handleNavClick(e, child.path!)}
                         className={({ isActive }) =>
                           `flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all ${
                             isActive ? "bg-orange-500 text-white" : "text-gray-400 hover:bg-gray-800 hover:text-white"
@@ -164,7 +193,7 @@ export default function Layout() {
           }
           return (
             <NavLink key={item.path} to={item.path!} end={item.path === "/"}
-              onClick={() => setSidebarOpen(false)}
+              onClick={(e) => handleNavClick(e, item.path!)}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
                   isActive ? "bg-orange-500 text-white"
@@ -186,7 +215,7 @@ export default function Layout() {
       {/* Bottom */}
       <div className="p-3 border-t border-gray-700 space-y-1">
         {!isPackingStaff && (
-          <NavLink to="/settings" onClick={() => setSidebarOpen(false)}
+          <NavLink to="/settings" onClick={(e) => handleNavClick(e, "/settings")}
             className={({ isActive }) =>
               `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
                 isActive ? "bg-orange-500 text-white" : "text-gray-300 hover:bg-gray-800"
@@ -237,6 +266,36 @@ export default function Layout() {
           <Outlet />
         </div>
       </div>
+
+      {/* ── Floating bubbles for minimized in-progress bills ── */}
+      <BillingBubbles />
+
+      {/* ── "Leave unsaved bill?" confirmation ── */}
+      {pendingNavTo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-5">
+            <p className="font-semibold text-gray-800 mb-1">Leave this billing?</p>
+            <p className="text-sm text-gray-500 mb-4">
+              This bill has items that haven't been saved yet. You can save it and
+              come back to it later from the floating bubble, or discard it.
+            </p>
+            <div className="flex gap-2 justify-end flex-wrap">
+              <button onClick={() => setPendingNavTo(null)}
+                className="px-3 py-2 text-sm text-gray-500 hover:bg-gray-50 rounded-lg">
+                Cancel
+              </button>
+              <button onClick={() => resolvePendingNav("discard")}
+                className="px-3 py-2 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50">
+                Discard
+              </button>
+              <button onClick={() => resolvePendingNav("save")}
+                className="px-3 py-2 text-sm text-white bg-orange-500 rounded-lg hover:bg-orange-600">
+                Save &amp; Minimize
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
