@@ -642,6 +642,13 @@ export default function CreateOrderPage() {
   const [products, setProducts]     = useState<Product[]>([]);
   const [regions, setRegions]       = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading]       = useState(true);
+  // True only after the products listener has delivered its first snapshot.
+  // A fresh mount of this page (e.g. resuming a minimized bill from the
+  // floating bubble on another screen) starts with `products = []` until
+  // that first snapshot arrives — diffing a draft against an empty catalogue
+  // would make every item look "removed", so anything that diffs a draft
+  // against the live catalogue must wait for this flag first.
+  const [productsLoaded, setProductsLoaded] = useState(false);
   const [frequentIds, setFrequentIds] = useState<string[]>([]);
 
   // Customer region filter
@@ -741,7 +748,10 @@ export default function CreateOrderPage() {
     // Real-time products so stock is always live
     unsubProducts = onSnapshot(
       query(collection(db, "products"), orderBy("name")),
-      (snap) => setProducts(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Product)))
+      (snap) => {
+        setProducts(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Product)));
+        setProductsLoaded(true);
+      }
     );
 
     init();
@@ -1255,7 +1265,15 @@ export default function CreateOrderPage() {
 
     Object.entries(draft.cartQty).forEach(([pid, qty]) => {
       const p = products.find((x) => x.id === pid);
-      if (!p) { warnings.push("⚠ A product was removed from catalogue"); return; }
+      if (!p) {
+        // Name it using the snapshot taken when this bill was minimized —
+        // the live product is gone, but we still know what it was called.
+        const knownName = draft.productSnapshot?.[pid]?.name;
+        warnings.push(
+          knownName ? `⚠ "${knownName}" was removed from catalogue` : "⚠ A product was removed from catalogue"
+        );
+        return;
+      }
 
       if (p.trackInventory) {
         const avail = availableQty(p);
@@ -1368,6 +1386,14 @@ export default function CreateOrderPage() {
   // this fires whether or not CreateOrderPage was already mounted/open.
   useEffect(() => {
     if (!resumeCustomerId) return;
+    // Wait for the products listener's first snapshot before diffing the
+    // draft against the catalogue — on a fresh mount (bubble clicked from
+    // another screen) `products` starts empty, and diffing against an
+    // empty list would make every cart item look "removed from catalogue"
+    // even though nothing actually changed. Don't clear the resume request
+    // yet either: once productsLoaded flips true, this effect re-runs and
+    // picks the same pending request back up.
+    if (!productsLoaded) return;
     const target = drafts[resumeCustomerId];
     if (target) {
       // If a different bill is currently open with items, save it first so
@@ -1379,7 +1405,7 @@ export default function CreateOrderPage() {
     }
     clearResumeRequest();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resumeToken]);
+  }, [resumeToken, productsLoaded]);
 
   // ── Keep the "has an unsaved bill open" flag in sync ───────────────
   // Layout uses this to decide whether to intercept sidebar navigation.

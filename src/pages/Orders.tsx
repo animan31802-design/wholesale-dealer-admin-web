@@ -550,7 +550,7 @@ export default function Orders() {
 
       <div className="bg-white rounded-xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-        <table className="w-full text-sm min-w-[680px]">
+        <table className="w-full text-sm min-w-[760px]">
           <thead className="bg-gray-50 text-gray-500 text-left text-xs uppercase tracking-wide">
             <tr>
               <th className="px-3 py-4 w-10">
@@ -566,6 +566,7 @@ export default function Orders() {
                 )}
               </th>
               <th className="px-5 py-4">Customer</th>
+              <th className="px-5 py-4">Region</th>
               <th className="px-5 py-4">Agent</th>
               <th className="px-5 py-4">Amount</th>
               <th className="px-5 py-4">Status</th>
@@ -593,6 +594,9 @@ export default function Orders() {
                   <p className="text-xs text-gray-400">
                     {order.customerAddress?.slice(0, 35)}{(order.customerAddress?.length ?? 0) > 35 ? "…" : ""}
                   </p>
+                </td>
+                <td className="px-5 py-3 text-gray-600 text-xs">
+                  {order.regionName || <span className="text-gray-300">—</span>}
                 </td>
                 <td className="px-5 py-3 text-gray-600 text-xs">{order.agentName}</td>
                 <td className="px-5 py-3 font-medium text-gray-800">₹{order.totalAmount.toFixed(2)}</td>

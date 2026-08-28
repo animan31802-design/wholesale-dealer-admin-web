@@ -770,11 +770,15 @@ function LedgerModal({ customer, isAdmin, onClose }: {
     finally { setSaving(false); }
   };
 
-  // Running balance per row
+  // Running balance per row — computed oldest→newest (entries from getLedger
+  // are already ascending) so each row's running balance is chronologically
+  // correct, then reversed just for display so the ledger shows latest
+  // transaction first, oldest last.
   const rows = entries.map((e, i) => {
     const running = calcBalance(entries.slice(0, i + 1));
     return { ...e, running };
   });
+  const displayRows = [...rows].reverse();
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
@@ -847,7 +851,7 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {rows.map((e) => (
+                  {displayRows.map((e) => (
                     <tr key={e.id} className="hover:bg-gray-50">
                       <td className="px-5 py-3 text-gray-500 whitespace-nowrap">
                         {new Date(e.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
