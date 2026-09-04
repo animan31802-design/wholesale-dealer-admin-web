@@ -1,10 +1,12 @@
-# Dev-access "Mark as Paid" reconciliation tool
+# Wholesale dealer fixes: dev-access reconciliation tool + mandatory order-linked payments
 
 ## Files changed
 - `src/types/index.ts` — adds `AppUser.devAccess`, `DevReconciliationEntry`, and
   `Order.devReconciliations` / `lastDevReconciledAt` / `lastDevReconciledBy` / `lastDevReconciledByName`.
 - `src/utils/ledger.ts` — adds `devReconcileOrderPayment()`.
 - `src/pages/Orders.tsx` — adds the "🛠 Mark as Paid (dev reconciliation)" button + modal in the order drawer.
+- `src/pages/Customers.tsx` — Record Payment tab now auto-selects unpaid orders (oldest-first) to match the
+  entered amount, and makes order-linking **mandatory** whenever the customer has unpaid orders. See §5 below.
 
 `tsc --noEmit` and `npm run build` both pass clean with these changes on top of your uploaded code.
 See `CHANGES.diff` for a reviewable unified diff of exactly what moved.
@@ -90,3 +92,29 @@ For each customer where you see this mismatch:
 
 Since it's live data, I'd suggest reconciling one customer fully, re-checking their
 ledger vs. orders vs. `outstandingDue` add up, and only then moving to the next.
+
+## 5. Customers → Record Payment tab: auto-select + mandatory linking
+
+This closes the loophole that caused the original mismatch, so it can't happen again
+going forward.
+
+**Auto-select (live):** as the admin types an amount, the oldest unpaid order(s) are
+ticked automatically until their combined due covers the amount — the last order
+picked may only be partially covered, exactly matching how the payment actually gets
+applied (`applyPaymentToOrders` fills oldest-first, partially settling the last one it
+touches). This only re-runs when the **amount** changes, so it never undoes a manual
+tick/untick the admin makes afterwards.
+
+**Manual override:** still fully available — tick or untick any order at any time.
+
+**Mandatory linkage:** whenever a customer has any unpaid orders, the "Record Payment"
+button now stays disabled unless:
+- at least one order is selected, **and**
+- the entered amount is ≤ the selected orders' total due.
+
+If the amount typed is more than what's selected can cover, there's a clear inline
+warning telling the admin to either select more orders or reduce the amount — it no
+longer silently falls back to an unlinked ledger-only payment. The only case where an
+unlinked payment still happens is a customer with **zero** unpaid orders (e.g. a due
+that came purely from a manual adjustment) — there's nothing to link to in that case,
+so the old ledger-only path is kept for that specific situation only.

@@ -709,6 +709,46 @@ function LedgerModal({ customer, isAdmin, onClose }: {
     selectedOrdersOldestFirst.reduce((s, o) => s + Math.max(0, o.totalAmount - (o.amountCollected ?? 0)), 0)
   );
 
+  // Total due across every unpaid order for this customer (not just selected).
+  // Used to (a) cap what a single payment can be linked to, and (b) decide
+  // whether order-linking is even possible for this customer right now.
+  const totalUnpaidOrdersDue = round2(
+    unpaidOrdersOldestFirst.reduce((s, o) => s + Math.max(0, o.totalAmount - (o.amountCollected ?? 0)), 0)
+  );
+  const hasUnpaidOrders = unpaidOrdersOldestFirst.length > 0;
+
+  // ── Live auto-select, oldest-first ───────────────────────────────
+  // As the admin types an amount, automatically tick the oldest unpaid
+  // order(s) needed to cover it — stopping as soon as the running total
+  // reaches the entered amount, so the last order picked may only be
+  // partially covered (exactly how applyPaymentToOrders allocates it).
+  // Only depends on `amount` (not on the selection itself), so a manual
+  // check/uncheck the admin makes afterwards is never silently undone —
+  // it only re-runs when the amount changes again.
+  useEffect(() => {
+    if (!hasUnpaidOrders) return;
+    const amt = parseFloat(amount) || 0;
+    if (amt <= 0) { setSelectedOrderIds(new Set()); return; }
+    let running = 0;
+    const next = new Set<string>();
+    for (const o of unpaidOrdersOldestFirst) {
+      if (running >= amt - 0.01) break;
+      const due = round2(o.totalAmount - (o.amountCollected ?? 0));
+      next.add(o.id!);
+      running = round2(running + due);
+    }
+    setSelectedOrderIds(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [amount]);
+
+  // Order-linking is mandatory whenever this customer has unpaid orders —
+  // this is what closes the gap that caused ledger vs. order-status
+  // mismatches: a payment can no longer be recorded "generally" while
+  // there are specific bills it could have been tied to instead.
+  const orderSelectionValid =
+    !hasUnpaidOrders ||
+    (selectedOrdersOldestFirst.length > 0 && parseFloat(amount || "0") <= selectedOrdersTotalDue + 0.01);
+
   const handlePayment = async () => {
     const amt = parseFloat(amount);
     if (isNaN(amt) || amt <= 0) return;
@@ -716,13 +756,17 @@ function LedgerModal({ customer, isAdmin, onClose }: {
       alert("Amount cannot exceed the current balance due.");
       return;
     }
-    if (selectedOrdersOldestFirst.length > 0 && amt > selectedOrdersTotalDue + 0.01) {
-      alert(`Amount exceeds the total due for the ${selectedOrdersOldestFirst.length} selected order(s) (₹${selectedOrdersTotalDue.toFixed(2)}). Select more orders, or reduce the amount, or deselect all orders for a general (non order-linked) payment.`);
+    if (hasUnpaidOrders && selectedOrdersOldestFirst.length === 0) {
+      alert("Select at least one order this payment covers. General (unlinked) payments are disabled while this customer has pending orders — this is what keeps the ledger and order statuses in sync.");
+      return;
+    }
+    if (hasUnpaidOrders && amt > selectedOrdersTotalDue + 0.01) {
+      alert(`Amount exceeds the total due for the ${selectedOrdersOldestFirst.length} selected order(s) (₹${selectedOrdersTotalDue.toFixed(2)}). Select more orders, or reduce the amount.`);
       return;
     }
     setSaving(true);
     try {
-      if (selectedOrdersOldestFirst.length > 0) {
+      if (hasUnpaidOrders) {
         // Order-aware settlement — fills the selected orders oldest-first,
         // fully settling each before any remainder spills into the next.
         // This keeps order.amountCollected / balanceDue / paymentMode in
@@ -739,9 +783,10 @@ function LedgerModal({ customer, isAdmin, onClose }: {
           user!.uid, user!.name
         );
       } else {
-        // No specific order(s) chosen — plain ledger-only credit (e.g. a
-        // goodwill adjustment or a payment that genuinely isn't tied to a
-        // specific order). Does not touch any order doc.
+        // No unpaid orders exist at all for this customer (e.g. a due that
+        // came purely from a manual adjustment) — nothing to link to, so a
+        // plain ledger-only credit is the only option. Does not touch any
+        // order doc.
         await recordManualPayment(
           customer.id!, amt,
           (note.trim() || "Manual payment") + " [" + paymentMode + "]",
@@ -983,15 +1028,17 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                     <span className="font-bold text-red-600 text-xl">₹{balance.toFixed(2)}</span>
                   </div>
 
-                  {/* Settle specific order(s) — optional */}
+                  {/* Settle specific order(s) — mandatory whenever this customer
+                      has unpaid orders. Auto-ticked oldest-first as the amount
+                      is typed; the admin can still adjust manually. */}
                   {unpaidOrdersOldestFirst.length > 0 && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Settle Specific Order(s) <span className="text-gray-400 font-normal">(optional)</span>
+                        Settle Specific Order(s) <span className="text-red-500">*</span>
                       </label>
                       <p className="text-xs text-gray-400 mb-2">
-                        Pick which unpaid orders this payment covers. Oldest orders are filled first — pick fewer
-                        orders for a focused settlement, or several to clear multiple at once.
+                        Auto-selected oldest-first to match the amount entered below — untick/tick to adjust.
+                        The amount can never exceed what's selected here, so every payment stays linked to a bill.
                       </p>
                       <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 max-h-56 overflow-y-auto">
                         {unpaidOrdersOldestFirst.map((o) => {
@@ -1036,9 +1083,9 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                       placeholder="0.00"
                       className={inp} />
                     <div className="flex gap-2 mt-2 flex-wrap">
-                      <button onClick={() => setAmount(balance.toFixed(2))}
+                      <button onClick={() => setAmount((hasUnpaidOrders ? Math.min(balance, totalUnpaidOrdersDue) : balance).toFixed(2))}
                         className="text-xs bg-green-100 text-green-700 px-3 py-1 rounded-full hover:bg-green-200 font-medium">
-                        Full ₹{balance.toFixed(2)}
+                        Full ₹{(hasUnpaidOrders ? Math.min(balance, totalUnpaidOrdersDue) : balance).toFixed(2)}
                       </button>
                       {[500, 1000, 2000].filter(v => v < balance).map(v => (
                         <button key={v} onClick={() => setAmount(String(v))}
@@ -1080,10 +1127,17 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                       <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-600 font-medium">
                         ⚠️ Amount exceeds balance due. Max is ₹{balance.toFixed(2)}
                       </div>
-                    ) : selectedOrdersOldestFirst.length > 0 && parseFloat(amount) > selectedOrdersTotalDue + 0.01 ? (
+                    ) : hasUnpaidOrders && selectedOrdersOldestFirst.length === 0 ? (
+                      <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-600 font-medium">
+                        ⚠️ Select at least one order below — this customer has pending orders, so the payment must
+                        be linked to specific bill(s).
+                      </div>
+                    ) : hasUnpaidOrders && parseFloat(amount) > selectedOrdersTotalDue + 0.01 ? (
                       <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-600 font-medium">
                         ⚠️ Amount exceeds the ₹{selectedOrdersTotalDue.toFixed(2)} due on the {selectedOrdersOldestFirst.length} selected order(s).
-                        Select more orders or reduce the amount.
+                        {selectedOrdersOldestFirst.length < unpaidOrdersOldestFirst.length
+                          ? " Select more orders, or reduce the amount."
+                          : ` This is the most that can be linked (all ${unpaidOrdersOldestFirst.length} unpaid orders are already selected) — reduce the amount, or record the rest separately as an adjustment.`}
                       </div>
                     ) : (
                       <div className="bg-gray-50 rounded-lg px-4 py-3 text-sm flex justify-between">
@@ -1102,7 +1156,7 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                       disabled={
                         saving || !amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0 ||
                         parseFloat(amount) > balance + 0.01 ||
-                        (selectedOrdersOldestFirst.length > 0 && parseFloat(amount) > selectedOrdersTotalDue + 0.01)
+                        !orderSelectionValid
                       }
                       className="flex-1 bg-green-500 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-green-600 disabled:opacity-50">
                       {saving ? "Saving..." : "✅ Record Payment"}
