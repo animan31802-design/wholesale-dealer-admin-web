@@ -9,6 +9,24 @@ export interface AppUser {
   assignedRegions?: string[];
   isActive?: boolean;
   createdAt: string;
+  // DEV-ONLY flag, toggled directly on this user's Firestore doc
+  // (users/{uid}) from the console — never exposed in the Users admin UI.
+  // When true, unlocks hidden developer/reconciliation tools for THIS user's
+  // session only (e.g. the order drawer's "Mark as Paid" dev tool). Meant to
+  // be switched on briefly while doing data-fix work, then switched back off.
+  devAccess?: boolean;
+}
+
+// Audit trail entry written whenever a dev-mode tool directly mutates a
+// live order's payment fields (bypassing the normal ledger-linked flow).
+// Kept on the order doc itself so there's always a record of who touched
+// what, when, and why — see utils/ledger.ts: devReconcileOrderPayment.
+export interface DevReconciliationEntry {
+  amount: number;
+  at: string;       // ISO timestamp
+  by: string;        // uid
+  byName: string;
+  note: string;      // required justification, e.g. "cash already recorded via customer ledger on 2 Sep, order wasn't linked"
 }
 
 export interface Region {
@@ -220,6 +238,13 @@ export interface Order {
   remainingItemsCancelled?: boolean;
   parentOrderId?: string;                 // set on follow-up reorders
   source?: string;                        // "partial_reorder" | etc.
+  // ── Dev-only reconciliation audit trail ──────────────────────
+  // Populated only by devReconcileOrderPayment (utils/ledger.ts), never by
+  // the normal payment flows. See that function for what it does/doesn't touch.
+  devReconciliations?: DevReconciliationEntry[];
+  lastDevReconciledAt?: string;
+  lastDevReconciledBy?: string;
+  lastDevReconciledByName?: string;
 }
 
 export interface DeliveredItem {

@@ -4,7 +4,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { LedgerEntry } from "../types/ledger";
-import { Customer, Order } from "../types";
+import { Customer, Order, DevReconciliationEntry } from "../types";
 
 // ── Overdue customer result ───────────────────────────────────────
 export interface OverdueCustomer {
@@ -309,6 +309,91 @@ export async function recordSingleOrderPayment(
 }
 
 function round2(n: number): number { return Math.round(n * 100) / 100; }
+
+// ── DEV-ONLY: direct order payment-status reconciliation ────────────────────
+// This is NOT part of the normal payment flow and must never be reachable by
+// a real user. It exists for one specific data-repair scenario: an admin used
+// the customer-level "Record Payment" tab (see Customers.tsx handlePayment)
+// without selecting the specific order(s) the cash belonged to. That path
+// calls recordManualPayment(), which correctly credits the ledger and reduces
+// customer.outstandingDue — but never touches the underlying order's
+// amountCollected/balanceDue, because it has no order to attach to. The
+// result: the ledger and outstandingDue are already correct, but the order
+// still shows as unpaid everywhere that reads amountCollected (order drawer,
+// Pending Collections report, Customers → Orders tab).
+//
+// This function ONLY fixes the order side of that gap. On purpose it:
+//   - does NOT write a ledger entry
+//   - does NOT touch customer.outstandingDue
+//   - DOES bump adminCollected (consistent with applyPaymentToOrders), so
+//     AgentCashCollection's cash-in-hand math keeps excluding this amount
+//     from whichever delivery agent handled the order
+//   - re-reads the order inside a transaction and validates against the
+//     order's OWN remaining balance, so it can never push amountCollected
+//     past totalAmount
+//   - requires a non-empty note and stamps who/when, appended to
+//     order.devReconciliations, so every use of this tool is auditable later
+//
+// Gate any UI that calls this behind AppUser.devAccess (see types/index.ts).
+// Never call this to record a genuinely new payment — use
+// recordSingleOrderPayment / applyPaymentToOrders for that, since those keep
+// the ledger and outstandingDue in sync the normal way.
+export async function devReconcileOrderPayment(
+  orderId: string,
+  amount: number,
+  note: string,
+  devId: string,
+  devName: string
+): Promise<{ newAmountCollected: number; newBalanceDue: number }> {
+  const trimmedNote = note.trim();
+  if (!(amount > 0)) throw new Error("Amount must be greater than zero.");
+  if (!trimmedNote) {
+    throw new Error("A note is required — it's written to this order's audit trail.");
+  }
+
+  const orderRef = doc(db, "orders", orderId);
+
+  return runTransaction(db, async (t) => {
+    const snap = await t.get(orderRef);
+    if (!snap.exists()) throw new Error("Order not found.");
+    const current = snap.data() as Order;
+
+    const totalAmount = current.totalAmount ?? 0;
+    const alreadyCollected = current.amountCollected ?? 0;
+    const priorAdminCollected = current.adminCollected ?? 0;
+    const remainingBalance = Math.max(0, round2(totalAmount - alreadyCollected));
+
+    if (amount > remainingBalance + 0.01) {
+      throw new Error(
+        `Amount (₹${amount.toFixed(2)}) exceeds this order's own remaining balance (₹${remainingBalance.toFixed(2)}).`
+      );
+    }
+
+    const newAmountCollected = round2(alreadyCollected + amount);
+    const newBalanceDue = Math.max(0, round2(totalAmount - newAmountCollected));
+
+    const entry: DevReconciliationEntry = {
+      amount,
+      at: new Date().toISOString(),
+      by: devId,
+      byName: devName,
+      note: trimmedNote,
+    };
+    const priorLog: DevReconciliationEntry[] = current.devReconciliations ?? [];
+
+    t.update(orderRef, {
+      amountCollected: newAmountCollected,
+      adminCollected: round2(priorAdminCollected + amount),
+      balanceDue: newBalanceDue,
+      devReconciliations: [...priorLog, entry],
+      lastDevReconciledAt: entry.at,
+      lastDevReconciledBy: devId,
+      lastDevReconciledByName: devName,
+    });
+
+    return { newAmountCollected, newBalanceDue };
+  });
+}
 
 // ── Record adjustment (positive = add due, negative = reduce due) ─
 export async function recordAdjustment(

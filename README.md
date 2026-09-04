@@ -1,73 +1,92 @@
-# React + TypeScript + Vite
+# Dev-access "Mark as Paid" reconciliation tool
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+## Files changed
+- `src/types/index.ts` — adds `AppUser.devAccess`, `DevReconciliationEntry`, and
+  `Order.devReconciliations` / `lastDevReconciledAt` / `lastDevReconciledBy` / `lastDevReconciledByName`.
+- `src/utils/ledger.ts` — adds `devReconcileOrderPayment()`.
+- `src/pages/Orders.tsx` — adds the "🛠 Mark as Paid (dev reconciliation)" button + modal in the order drawer.
 
-Currently, two official plugins are available:
+`tsc --noEmit` and `npm run build` both pass clean with these changes on top of your uploaded code.
+See `CHANGES.diff` for a reviewable unified diff of exactly what moved.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## 1. How the dev-mode switch works (no new plumbing needed)
 
-## React Compiler
+Your `App.tsx` already keeps a **live** `onSnapshot` listener on `users/{uid}` for
+the logged-in user, so it re-applies instantly if that doc changes — no re-login needed.
+That's exactly the mechanism you described. So turning the hidden features on/off for
+one person is just:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+1. Open Firebase Console → Firestore → `users` collection.
+2. Find that person's doc (their `uid`, same id as their Firebase Auth user).
+3. Add/edit a boolean field: `devAccess: true`.
+4. When you're done, flip it back to `false` (or delete the field).
 
-## Expanding the ESLint configuration
+Nothing in the app UI (not even `Users.tsx`, the admin user-management screen) exposes
+this field — it's console-only by design, so it can't be toggled by mistake or by a
+non-technical admin.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+**One thing worth doing outside this codebase:** if you have Firestore security rules
+deployed, add a rule so a user can never write their *own* `devAccess` field via the
+client SDK (only reads should be allowed on that field, and only your Admin
+SDK/console should be able to write it). I don't have your `firestore.rules` in this
+zip, so I couldn't check/edit it — just flagging it so `devAccess` can't be self-granted.
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## 2. What "Mark as Paid" does and doesn't do
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+It only appears in the order drawer when the logged-in user has `devAccess: true`,
+they're an admin, the order is delivered, and it has a balance due — same visibility
+condition as "Record Payment", plus the dev flag.
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+It calls `devReconcileOrderPayment(orderId, amount, note, uid, name)`, which:
+- ✅ Updates that order's `amountCollected` / `balanceDue` directly.
+- ✅ Bumps `adminCollected` by the same amount, so `AgentCashCollection.tsx`'s
+  cash-in-hand math keeps excluding it from whatever delivery agent handled the order
+  (same convention `applyPaymentToOrders` already uses).
+- ✅ Appends an entry to `order.devReconciliations[]` (amount, timestamp, your uid/name,
+  and a required note) and stamps `lastDevReconciledAt/By/ByName` — so every use is
+  auditable later, including by someone other than you.
+- ❌ Does **not** write a ledger entry under `customers/{id}/payments`.
+- ❌ Does **not** touch `customer.outstandingDue`.
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+That last two are the point: in your broken cases, the ledger and `outstandingDue` are
+already correct (the cash was recorded via the customer-level "Record Payment" tab
+without a bill selected, which calls `recordManualPayment` — ledger + due only, no
+order write). This tool fixes only the order side, so nothing gets double-counted.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+The modal requires a short reason/reference note and an explicit confirmation checkbox
+before the button enables, since this writes directly to live orders.
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+## 3. Root cause, confirmed in your code
+
+`Customers.tsx` → the "Record Payment" tab → `handlePayment()`:
+- If the admin **checks specific order(s)** in "Settle Specific Order(s)" → calls
+  `applyPaymentToOrders`, which updates the ledger, `outstandingDue`, **and** each
+  order's `amountCollected`/`balanceDue`. Fully correct.
+- If **no orders are checked** → calls `recordManualPayment`, which only writes a
+  ledger credit and reduces `outstandingDue`. No order is touched.
+
+So any time your team collected a bulk/general payment from a customer and didn't
+tick the specific bill(s) it covered, the money is correctly in the ledger and
+`outstandingDue`, but the underlying order(s) still look unpaid — which is exactly
+what inflates "Pending Collections" in `FinanceReports.tsx` (it sums
+`totalAmount - amountCollected` per order).
+
+## 4. How to actually fix the affected orders
+
+For each customer where you see this mismatch:
+1. Open Customers → that customer → **Ledger** tab, and cross-check against **Orders**
+   tab to see which specific orders are still showing a balance despite the ledger
+   being settled.
+2. Confirm the math: sum of "pending" orders for that customer should currently be
+   *more* than their real `outstandingDue` — that gap is what you're correcting.
+3. Enable `devAccess: true` on your own user doc in Firestore.
+4. Open each affected order → "🛠 Mark as Paid (dev reconciliation)" → enter the
+   amount that was actually already paid for that specific bill, add a note
+   (e.g. "Bulk payment on 2 Sep wasn't linked — see ledger entry X"), confirm, save.
+5. Re-check `outstandingDue` on the customer doc — it should be unchanged by this
+   step (by design). Only the order-level and Pending Collections numbers should move.
+6. Once all affected orders for that customer are cleared, set `devAccess: false`
+   again on your user doc.
+
+Since it's live data, I'd suggest reconciling one customer fully, re-checking their
+ledger vs. orders vs. `outstandingDue` add up, and only then moving to the next.

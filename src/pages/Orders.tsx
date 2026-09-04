@@ -11,7 +11,7 @@ import { useAuthStore } from "../store/authStore";
 import { useModalKeyboard } from "../hooks/useModalKeyboard";
 const fmtQ = (n: number) => parseFloat(n.toFixed(4)).toString();
 import { buildInvoicePDF } from "../utils/invoice";
-import { recordSingleOrderPayment } from "../utils/ledger";
+import { recordSingleOrderPayment, devReconcileOrderPayment } from "../utils/ledger";
 import Pagination from "../components/Pagination";
 import { Customer, InvoiceType, BillingMode, ChargeDiscountType, AppliedChargeDiscount } from "../types";
 import { useTamilSearch } from "../utils/UseTamilSearch";
@@ -1699,6 +1699,10 @@ export function OrderDetailPanel({
   const [receiveBack, setReceiveBack]   = useState(false);
   const [reassign,    setReassign]      = useState(false);
   const [showRecordPayment, setShowRecordPayment] = useState(false);
+  const [showMarkAsPaid, setShowMarkAsPaid] = useState(false);
+  // Dev-only tool visibility — see AppUser.devAccess. Toggled per-user
+  // directly on their Firestore users/{uid} doc, never from this app's UI.
+  const devAccess = isAdmin && panelUser?.devAccess === true;
 
   return (
     <>
@@ -1710,6 +1714,9 @@ export function OrderDetailPanel({
       )}
       {showRecordPayment && (
         <RecordPaymentModal order={order} onClose={() => setShowRecordPayment(false)} onDone={() => { setShowRecordPayment(false); onClose(); }} />
+      )}
+      {showMarkAsPaid && (
+        <MarkAsPaidDevModal order={order} onClose={() => setShowMarkAsPaid(false)} onDone={() => { setShowMarkAsPaid(false); onClose(); }} />
       )}
       {/* Backdrop */}
       <div className="fixed inset-0 bg-black/40 z-40" onClick={onClose} />
@@ -1836,6 +1843,21 @@ export function OrderDetailPanel({
                   className="w-full mt-2 bg-green-600 text-white py-2 rounded-xl text-sm font-semibold hover:bg-green-700">
                   💰 Record Payment
                 </button>
+              )}
+              {/* DEV-ONLY: direct payment-status reconciliation tool. Only
+                  ever visible when the logged-in user's own Firestore doc has
+                  devAccess: true — see AppUser.devAccess. */}
+              {devAccess && isDelivered && balance !== null && balance > 0 && (
+                <button onClick={() => setShowMarkAsPaid(true)}
+                  className="w-full mt-2 bg-amber-100 text-amber-800 border border-dashed border-amber-400 py-2 rounded-xl text-sm font-semibold hover:bg-amber-200">
+                  🛠 Mark as Paid (dev reconciliation)
+                </button>
+              )}
+              {devAccess && (order.devReconciliations?.length ?? 0) > 0 && (
+                <p className="text-[11px] text-amber-600 mt-1.5">
+                  🛠 Reconciled {order.devReconciliations!.length}× — last by {order.lastDevReconciledByName} on{" "}
+                  {fmt(order.lastDevReconciledAt)}
+                </p>
               )}
             </div>
           </div>
@@ -2209,6 +2231,111 @@ function RecordPaymentModal({ order, onClose, onDone }: {
           <button onClick={handleSubmit} disabled={saving || !isValid}
             className="flex-1 bg-green-600 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-green-700 disabled:opacity-50">
             {saving ? "Saving..." : "✅ Record Payment"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── DEV-ONLY: Mark as Paid (payment-status reconciliation) ──────────────────
+// Not a normal payment action. Use ONLY to fix an order whose cash was
+// already collected and recorded (e.g. a customer-level "Record Payment"
+// where the specific order wasn't checked, so the ledger/outstandingDue are
+// already correct but this order's own amountCollected never got updated).
+// It deliberately does NOT write a ledger entry and does NOT touch
+// customer.outstandingDue — see utils/ledger.ts: devReconcileOrderPayment.
+// Only rendered when the logged-in user has AppUser.devAccess === true.
+function MarkAsPaidDevModal({ order, onClose, onDone }: {
+  order: Order; onClose: () => void; onDone: () => void;
+}) {
+  const { user } = useAuthStore();
+  const alreadyCollected = order.amountCollected ?? 0;
+  const remainingBalance = Math.max(0, Math.round((order.totalAmount - alreadyCollected) * 100) / 100);
+
+  const [amount, setAmount]     = useState(String(remainingBalance));
+  const [note, setNote]         = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [saving, setSaving]     = useState(false);
+  const [error, setError]       = useState("");
+
+  const amountNum = parseFloat(amount) || 0;
+  const isValid = amountNum > 0 && amountNum <= remainingBalance + 0.01 && note.trim().length > 0 && confirmed;
+
+  const handleSubmit = async () => {
+    if (!isValid || !order.id) return;
+    setSaving(true);
+    setError("");
+    try {
+      await devReconcileOrderPayment(order.id, amountNum, note.trim(), user!.uid, user!.name);
+      onDone();
+    } catch (err: any) {
+      setError(err.message || "Failed to reconcile order.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  useModalKeyboard({ onClose, onConfirm: handleSubmit, disabled: saving || !isValid });
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <div>
+            <h3 className="text-lg font-semibold text-amber-800">🛠 Mark as Paid — Dev Reconciliation</h3>
+            <p className="text-sm text-gray-500">{order.customerName} — #{order.orderNo ?? order.id?.slice(0, 8).toUpperCase()}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-800 leading-relaxed">
+            This does <strong>not</strong> create a cash-ledger entry and does <strong>not</strong> touch the
+            customer's outstanding due. It only updates this order's own payment status. Use it only when the
+            cash was already recorded elsewhere (e.g. a customer-level payment that wasn't linked to this order) —
+            never to record a genuinely new payment. For a real payment, close this and use "Record Payment" instead.
+          </div>
+          <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-600 flex justify-between">
+            <span>Order Balance Due</span>
+            <span className="font-bold text-gray-800">₹{remainingBalance.toFixed(2)}</span>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Amount to Mark as Paid <span className="text-red-500">*</span></label>
+            <input
+              type="number" min="0.01" max={remainingBalance} step="0.01"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
+            />
+            {amountNum > remainingBalance + 0.01 && (
+              <p className="text-xs text-red-500 mt-1">Cannot exceed this order's own balance due (₹{remainingBalance.toFixed(2)}).</p>
+            )}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Reason / Reference <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text" value={note} onChange={(e) => setNote(e.target.value)}
+              placeholder="e.g. Cash already recorded via customer ledger on 2 Sep, order wasn't linked"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
+            />
+            <p className="text-xs text-gray-400 mt-1">Required — saved to this order's audit trail (devReconciliations).</p>
+          </div>
+          <label className="flex items-start gap-2 text-xs text-gray-600 cursor-pointer">
+            <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)}
+              className="mt-0.5 rounded border-gray-300" />
+            <span>I confirm this cash was already collected and recorded (e.g. in the customer ledger), and
+              I'm only correcting this order's payment status — not recording a new payment.</span>
+          </label>
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2 text-xs text-red-600">{error}</div>
+          )}
+        </div>
+        <div className="flex gap-3 px-6 pb-6">
+          <button onClick={onClose} className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm">Cancel</button>
+          <button onClick={handleSubmit} disabled={saving || !isValid}
+            className="flex-1 bg-amber-600 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-amber-700 disabled:opacity-50">
+            {saving ? "Saving..." : "🛠 Mark as Paid"}
           </button>
         </div>
       </div>
