@@ -269,6 +269,7 @@ export async function applyPaymentToOrders(
         adminCollected: round2(priorAdminCollected + alloc.amountApplied),
         balanceDue: Math.max(0, round2(order.totalAmount - alloc.newAmountCollected)),
         paymentMode,
+        lastPaymentAt: new Date().toISOString(),
       });
 
       const entryRef = doc(ledgerCol(customerId));
@@ -385,6 +386,7 @@ export async function devReconcileOrderPayment(
       amountCollected: newAmountCollected,
       adminCollected: round2(priorAdminCollected + amount),
       balanceDue: newBalanceDue,
+      lastPaymentAt: entry.at,
       devReconciliations: [...priorLog, entry],
       lastDevReconciledAt: entry.at,
       lastDevReconciledBy: devId,

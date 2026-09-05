@@ -238,6 +238,14 @@ export interface Order {
   remainingItemsCancelled?: boolean;
   parentOrderId?: string;                 // set on follow-up reorders
   source?: string;                        // "partial_reorder" | etc.
+  // Timestamp of the most recent money applied to this order, set by
+  // applyPaymentToOrders / recordSingleOrderPayment / devReconcileOrderPayment.
+  // Use this (not createdAt) for anything reporting "cash collected in period
+  // X" — createdAt is the order placement date, which for credit customers,
+  // late payments, or dev reconciliations of old orders can be a very
+  // different date to when the money actually came in. Absent on orders
+  // that predate this field; reports fall back to deliveredAt/createdAt.
+  lastPaymentAt?: string;
   // ── Dev-only reconciliation audit trail ──────────────────────
   // Populated only by devReconcileOrderPayment (utils/ledger.ts), never by
   // the normal payment flows. See that function for what it does/doesn't touch.

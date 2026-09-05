@@ -1066,6 +1066,10 @@ export default function CreateOrderPage() {
         if (customer.lng != null)            orderPayload.customerLng  = customer.lng;
         if (notes.trim())                    orderPayload.notes        = notes.trim();
         if (customer.gstin)                  orderPayload.customerGstin = customer.gstin;
+        // An advance collected right at creation is a real payment event —
+        // stamp it so Collections/Payment Mode reports (which key off
+        // lastPaymentAt, not createdAt) pick it up in the right period.
+        if (paid > 0)                        orderPayload.lastPaymentAt = new Date().toISOString();
 
         const orderRef = doc(collection(db, "orders"));
         newOrderId     = orderRef.id;

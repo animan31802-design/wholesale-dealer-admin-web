@@ -799,13 +799,20 @@ function CollectionsReport({ orders }: { orders: Order[] }) {
   const collected = useMemo(() => {
     const f = new Date(from); f.setHours(0,0,0,0);
     const t = new Date(to);   t.setHours(23,59,59,999);
-    return orders.filter(o =>
-      o.status === "delivered" &&
-      (o.amountCollected ?? 0) > 0 &&
-      new Date(o.createdAt) >= f &&
-      new Date(o.createdAt) <= t &&
-      (agentFilter === "All" || o.agentName === agentFilter)
-    );
+    return orders.filter(o => {
+      // Use the actual payment date, not order-creation date, to decide
+      // which period a collection belongs to — see Order.lastPaymentAt.
+      // Falls back to deliveredAt, then createdAt, for orders that predate
+      // that field (best available approximation, not exact).
+      const paymentDate = new Date(o.lastPaymentAt ?? o.deliveredAt ?? o.createdAt);
+      return (
+        o.status === "delivered" &&
+        (o.amountCollected ?? 0) > 0 &&
+        paymentDate >= f &&
+        paymentDate <= t &&
+        (agentFilter === "All" || o.agentName === agentFilter)
+      );
+    });
   }, [orders, from, to, agentFilter]);
 
   const agents = ["All", ...Array.from(new Set(orders.map(o => o.agentName).filter(Boolean)))];
@@ -817,7 +824,7 @@ function CollectionsReport({ orders }: { orders: Order[] }) {
   // Daily trend
   const dailyMap: Record<string, number> = {};
   collected.forEach(o => {
-    const d = o.createdAt.slice(0, 10);
+    const d = (o.lastPaymentAt ?? o.deliveredAt ?? o.createdAt).slice(0, 10);
     dailyMap[d] = (dailyMap[d] || 0) + (o.amountCollected ?? 0);
   });
   const chartData = Object.entries(dailyMap).sort().map(([date, amt]) => ({
@@ -825,9 +832,10 @@ function CollectionsReport({ orders }: { orders: Order[] }) {
     amount: +amt.toFixed(0),
   }));
 
-  const HEADERS = ["Date", "Invoice No.", "Customer", "Agent", "Billed", "Collected", "Balance", "Payment Mode"];
+  const HEADERS = ["Collected On", "Order Date", "Invoice No.", "Customer", "Agent", "Billed", "Collected", "Balance", "Payment Mode"];
   const getRows = () => collected.map(o => [
-    fmtDate(o.createdAt), o.invoiceNumber || o.id!, o.customerName, o.agentName,
+    fmtDate(o.lastPaymentAt ?? o.deliveredAt ?? o.createdAt), fmtDate(o.createdAt),
+    o.invoiceNumber || o.id!, o.customerName, o.agentName,
     o.totalAmount.toFixed(2), (o.amountCollected ?? 0).toFixed(2),
     Math.max(0, o.totalAmount - (o.amountCollected ?? 0)).toFixed(2),
     o.paymentMode || "—",
@@ -873,7 +881,8 @@ function CollectionsReport({ orders }: { orders: Order[] }) {
         <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
             <tr>
-              <th className="px-4 py-3 text-left">Date</th>
+              <th className="px-4 py-3 text-left">Collected On</th>
+              <th className="px-4 py-3 text-left">Order Date</th>
               <th className="px-4 py-3 text-left">Invoice</th>
               <th className="px-4 py-3 text-left">Customer</th>
               <th className="px-4 py-3 text-left">Agent</th>
@@ -888,7 +897,8 @@ function CollectionsReport({ orders }: { orders: Order[] }) {
               const balance = Math.max(0, o.totalAmount - (o.amountCollected ?? 0));
               return (
                 <tr key={o.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">{fmtDate(o.createdAt)}</td>
+                  <td className="px-4 py-3 text-gray-700 text-xs whitespace-nowrap font-medium">{fmtDate(o.lastPaymentAt ?? o.deliveredAt ?? o.createdAt)}</td>
+                  <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{fmtDate(o.createdAt)}</td>
                   <td className="px-4 py-3 font-mono text-xs text-blue-700">{o.invoiceNumber || o.id}</td>
                   <td className="px-4 py-3 text-gray-800">{o.customerName}</td>
                   <td className="px-4 py-3 text-gray-500 text-xs">{o.agentName}</td>
@@ -910,7 +920,7 @@ function CollectionsReport({ orders }: { orders: Order[] }) {
           </tbody>
           <tfoot className="bg-orange-50 border-t-2 border-orange-200 font-semibold">
             <tr>
-              <td colSpan={4} className="px-4 py-3 text-gray-700">Total ({collected.length} orders)</td>
+              <td colSpan={5} className="px-4 py-3 text-gray-700">Total ({collected.length} orders)</td>
               <td className="px-4 py-3 text-right">{fmtINR(totalBilled)}</td>
               <td className="px-4 py-3 text-right text-green-700">{fmtINR(totalCollected)}</td>
               <td className="px-4 py-3 text-right text-red-600">{fmtINR(totalBalance)}</td>
@@ -1072,6 +1082,10 @@ function ProfitReport({ orders }: { orders: Order[] }) {
   // No product lookup needed — costPrice is snapshotted on each order item at creation time.
   // For old orders without costPrice on items, cost will show as 0 (honest, not misleading).
 
+  // NOTE: intentionally accrual-based (bucketed by order.createdAt, i.e. when
+  // the sale was booked) — this is a revenue/margin-per-sale view, not a
+  // cash-in-the-door view. Unlike CollectionsReport / PaymentModeReport
+  // (which now use lastPaymentAt), this one should stay on createdAt.
   const filtered = useMemo(() => {
     const f = new Date(from); f.setHours(0,0,0,0);
     const t = new Date(to);   t.setHours(23,59,59,999);
@@ -1235,11 +1249,12 @@ function PaymentModeReport({ orders }: { orders: Order[] }) {
   const filtered = useMemo(() => {
     const f = new Date(from); f.setHours(0,0,0,0);
     const t = new Date(to);   t.setHours(23,59,59,999);
-    return orders.filter(o =>
-      o.status === "delivered" &&
-      new Date(o.createdAt) >= f &&
-      new Date(o.createdAt) <= t
-    );
+    return orders.filter(o => {
+      // Same fix as CollectionsReport: bucket by actual payment date, not
+      // order-creation date — see Order.lastPaymentAt.
+      const paymentDate = new Date(o.lastPaymentAt ?? o.deliveredAt ?? o.createdAt);
+      return o.status === "delivered" && paymentDate >= f && paymentDate <= t;
+    });
   }, [orders, from, to]);
 
   const modeMap: Record<string, { count: number; amount: number }> = {};
