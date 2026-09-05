@@ -1703,6 +1703,13 @@ export function OrderDetailPanel({
   // Dev-only tool visibility — see AppUser.devAccess. Toggled per-user
   // directly on their Firestore users/{uid} doc, never from this app's UI.
   const devAccess = isAdmin && panelUser?.devAccess === true;
+  // Unlike `balance` above (which is null for orders that never had a
+  // collection attempt, and is otherwise only meaningful post-delivery),
+  // the dev tool works on ANY order regardless of status — draft, confirmed,
+  // out for delivery, delivered, even cancelled — since reconciliation isn't
+  // about the delivery workflow, it's about fixing amountCollected directly.
+  // Treats a never-set amountCollected as 0 rather than hiding the button.
+  const devBalance = Math.max(0, Math.round((order.totalAmount - (order.amountCollected ?? 0)) * 100) / 100);
 
   return (
     <>
@@ -1846,8 +1853,9 @@ export function OrderDetailPanel({
               )}
               {/* DEV-ONLY: direct payment-status reconciliation tool. Only
                   ever visible when the logged-in user's own Firestore doc has
-                  devAccess: true — see AppUser.devAccess. */}
-              {devAccess && isDelivered && balance !== null && balance > 0 && (
+                  devAccess: true — see AppUser.devAccess. Shown regardless of
+                  order status/delivery state — see devBalance above. */}
+              {devAccess && devBalance > 0 && (
                 <button onClick={() => setShowMarkAsPaid(true)}
                   className="w-full mt-2 bg-amber-100 text-amber-800 border border-dashed border-amber-400 py-2 rounded-xl text-sm font-semibold hover:bg-amber-200">
                   🛠 Mark as Paid (dev reconciliation)

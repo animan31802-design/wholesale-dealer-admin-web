@@ -58,6 +58,12 @@ order write). This tool fixes only the order side, so nothing gets double-counte
 The modal requires a short reason/reference note and an explicit confirmation checkbox
 before the button enables, since this writes directly to live orders.
 
+**Visibility, dev mode vs. normal:** the "Record Payment" button still only shows for
+delivered orders with a balance. The dev-only "🛠 Mark as Paid" button is different on
+purpose — it shows for **any** order status (draft, confirmed, out for delivery,
+delivered, even cancelled) as long as there's a positive `totalAmount - amountCollected`
+gap, since reconciliation isn't tied to the delivery workflow.
+
 ## 3. Root cause, confirmed in your code
 
 `Customers.tsx` → the "Record Payment" tab → `handlePayment()`:
