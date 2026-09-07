@@ -1,4 +1,4 @@
-# Wholesale dealer fixes: dev-access reconciliation tool, mandatory order-linked payments, and collections date-accuracy fix
+# Wholesale dealer fixes: dev-access reconciliation tool, mandatory order-linked payments, collections date-accuracy fix, and Customer Balance report improvements
 
 ## Files changed
 - `src/types/index.ts` — adds `AppUser.devAccess`, `DevReconciliationEntry`,
@@ -11,6 +11,10 @@
 - `src/pages/FinanceReports.tsx` — Collections Report and Payment Mode Breakdown now bucket by actual payment
   date (`lastPaymentAt`), not order-creation date. See §6 below.
 - `src/pages/CreateOrderPage.tsx` — stamps `lastPaymentAt` when an advance is collected at order creation.
+- `src/pages/CustomerReports.tsx` — Customer Balances tab gets an Area column, a "Only customers with due"
+  filter, and print output now respects the new chart setting. See §7 below.
+- `src/pages/Settings.tsx` — new "Reports & Printing" setting: Include/Exclude charts in printed reports.
+  See §7 below.
 
 `tsc --noEmit` and `npm run build` both pass clean with these changes on top of your uploaded code.
 See `CHANGES.diff` for a reviewable unified diff of exactly what moved.
@@ -160,3 +164,69 @@ that write must live in a separate delivery-facing app/interface. If one exists,
 should stamp `lastPaymentAt` the same way when it records a delivery collection, or
 those collections will keep being bucketed by `deliveredAt`/`createdAt` instead of the
 exact moment the cash came in.
+
+## 7. Customer Reports → Customer Balance: Area column, due-only filter, chart-free printing
+
+**Area column:** the shop's area now has its own column (Region, then Area) instead of
+being a small subtext line under the shop name. It reads from the same `customer.area`
+field that was already there — nothing else changes.
+
+**"Only customers with due" filter:** a checkbox next to the Region dropdown. When
+checked, customers with zero balance are hidden from both the table and the export —
+useful when you only want to work through people who actually owe money. It combines
+with the existing search and region filters (all three narrow the same list together).
+
+**Charts in printed reports — new global setting:** Settings → **Reports & Printing** →
+"Charts in Printed Reports", with an Include/Exclude toggle. Defaults to **Include**
+(unchanged prior behaviour) until an admin turns it off.
+
+Turning it off removes the bar/pie charts from what gets printed on the Customer
+Balances, Top Customers, Order Frequency, and By Region tabs — the data table still
+prints in full either way, just without the chart above it.
+
+**Why this only touches Customer Reports:** I checked every report page for how they
+build their print output. Finance, Orders, Stock, Staff Attendance, and Agent reports
+all generate print output directly from `headers`/`rows` data — they never included
+charts in print in the first place, so this setting has no effect on them (and doesn't
+need to — there's nothing to exclude). Customer Reports is the only page that prints by
+cloning what's actually on screen, which is why it was the only place showing charts in
+print to begin with. The setting is still named/placed generically ("Reports &
+Printing", not "Customer Reports"), so if another report page is ever built the same
+way (DOM-clone printing with charts), it can opt into the same setting by tagging its
+chart card with the `report-chart-block` CSS class — no new setting needed.
+
+## 8. Customer Balances: misleading "Last 30 days" label, and a clean handover-sheet print
+
+**"Last 30 days" label:** Customer Balances (and the Ledger Statement tab) were always
+showing the *complete, all-time* outstanding — they never actually filtered by the
+7/30/90-day picker. The picker itself is already hidden on those two tabs, but the
+header line above it (`"49 customers · 29 with outstanding dues · Last 30 days"`) still
+appended whatever date range happened to be selected elsewhere, which was misleading.
+That trailing range text is now only shown on the tabs that are genuinely date-scoped
+(Top Customers, Order Frequency, By Region) — Customer Balances and Ledger Statement no
+longer show it. Nothing about the actual numbers changed, this was a label-only issue.
+
+*(Side note, not changed: the "Active (in range)" summary card at the top still uses
+that same date picker and still shows on every tab, including Customer Balances. Say
+the word if you'd like that hidden on this tab too.)*
+
+**Printed sheet, cleaned up for handover to the delivery person:** the filter bar
+(search box, region dropdown, "Only customers with due" checkbox, the "X of Y
+customers · filtered" text) and the card header text ("All Customer Balances", "29 with
+balance due · Total outstanding: ₹...") no longer appear in print — same `.print-hide`
+technique as the rest of this section. Only the actual table prints now, plus the page
+title/subtitle `printTable` already puts at the top.
+
+The **Status** column (Clear / Due / Over Limit badges) is swapped out for a blank
+**Collected (₹)** column in print only — an empty bordered box per row, sized for
+writing a number by hand. On screen, nothing changes: you still see the Status badges
+as before. Handing this sheet to a delivery person now gives them shop, area, phone,
+and balance due, with a physical box next to each row to write down what they actually
+collected.
+
+**The print subtitle had the same "Last 30 days" bug, separately from the on-screen
+header — also fixed.** `printTable`'s subtitle line (shown just under the report title
+on the printed page) was always fed `rangeLabel` regardless of which tab was open. It's
+now blank for Customer Balances and Ledger Statement (the same two all-time tabs), and
+the subtitle line itself is only rendered when there's something to show, so there's no
+leftover empty line on the printed sheet.

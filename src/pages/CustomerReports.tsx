@@ -6,6 +6,7 @@ import {
 import { db } from "../firebase/config";
 import { Order, Customer } from "../types";
 import { LedgerEntry } from "../types/ledger";
+import { getBusinessSettings } from "./Settings";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -50,7 +51,7 @@ function getDateRange(range: DateRange, customFrom: string, customTo: string): [
   return [from, to];
 }
 
-function printTable(id: string, title: string, subtitle: string) {
+function printTable(id: string, title: string, subtitle: string, includeCharts: boolean) {
   const el = document.getElementById(id);
   if (!el) return;
   const w = window.open("", "_blank");
@@ -67,8 +68,19 @@ function printTable(id: string, title: string, subtitle: string) {
       tr:nth-child(even) td{background:#fafafa}
       .total-row td{font-weight:bold;background:#fff3e0!important}
       @media print{body{padding:0}}
+      /* Filter bars and on-screen-only summary text never belong on a printed
+         sheet — tag anything like that with .print-hide (see JSX below). */
+      .print-hide{display:none!important}
+      /* Blank box for the delivery person to write the amount actually
+         collected from each shop — see the Collected (₹) column in JSX. */
+      .print-write-box{display:inline-block;width:90px;height:22px;border:1px solid #999;border-radius:3px}
+      /* Chart cards are tagged with .report-chart-block (see JSX below) so
+         they can be dropped from print output based on the business's
+         "Charts in Printed Reports" setting (Settings.tsx: includeGraphsInPrint)
+         without needing a second render pass. */
+      ${includeCharts ? "" : ".report-chart-block{display:none!important}"}
     </style></head><body>
-    <h1>${title}</h1><p class="sub">${subtitle}</p>
+    <h1>${title}</h1>${subtitle ? `<p class="sub">${subtitle}</p>` : ""}
     ${el.innerHTML}
     </body></html>
   `);
@@ -88,9 +100,19 @@ export default function CustomerReports() {
   const [ledgerCustomerId, setLedgerCustomerId] = useState("");
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
   const [ledgerLoading, setLedgerLoading] = useState(false);
+  // "Charts in Printed Reports" business setting — see Settings.tsx.
+  // Defaults to true (charts included) until the setting loads, matching
+  // prior behaviour so nothing changes for businesses that haven't visited
+  // Settings since this was added.
+  const [includeGraphsInPrint, setIncludeGraphsInPrint] = useState(true);
   const [topN, setTopN]                   = useState(10);
   const [dueSearch, setDueSearch]         = useState("");
   const [dueRegion, setDueRegion]         = useState("All");
+  const [dueOnly, setDueOnly]             = useState(false);
+
+  useEffect(() => {
+    getBusinessSettings().then(s => setIncludeGraphsInPrint(s.includeGraphsInPrint ?? true)).catch(() => {});
+  }, []);
 
   useEffect(() => {
     const u1 = onSnapshot(
@@ -143,12 +165,13 @@ export default function CustomerReports() {
     const q = dueSearch.toLowerCase().trim();
     return allCustomerBalances.filter((c) => {
       if (dueRegion !== "All" && c.region !== dueRegion) return false;
+      if (dueOnly && c.due <= 0) return false;
       if (q && !c.shopName.toLowerCase().includes(q) &&
                !c.ownerName.toLowerCase().includes(q) &&
                !(c.phone || "").includes(q)) return false;
       return true;
     });
-  }, [allCustomerBalances, dueSearch, dueRegion]);
+  }, [allCustomerBalances, dueSearch, dueRegion, dueOnly]);
 
   // ── 2. Top customers by order value ─────────────────────────────
   const topCustomerData = useMemo(() => {
@@ -365,7 +388,13 @@ export default function CustomerReports() {
         <div>
           <h2 className="text-2xl font-bold text-gray-800">Customer Reports</h2>
           <p className="text-sm text-gray-400 mt-0.5">
-            {customers.length} customers · {dueData.length} with outstanding dues · {rangeLabel}
+            {customers.length} customers · {dueData.length} with outstanding dues
+            {/* Customer Balances (and the Ledger Statement) always show the
+                complete, all-time outstanding — they're never limited to the
+                7/30/90-day picker below, so the range label doesn't belong
+                here for those two tabs (it was misleadingly implying the
+                balances themselves were date-limited). */}
+            {activeTab !== "outstanding_dues" && activeTab !== "ledger_statement" ? ` · ${rangeLabel}` : ""}
           </p>
         </div>
         <div className="flex gap-2">
@@ -379,7 +408,15 @@ export default function CustomerReports() {
               📄 Download PDF
             </button>
           ) : (
-            <button onClick={() => printTable("cr-print-area", TABS.find(t=>t.key===activeTab)?.label || "", rangeLabel)}
+            <button onClick={() => printTable(
+              "cr-print-area",
+              TABS.find(t=>t.key===activeTab)?.label || "",
+              // Same fix as the on-screen header above: Customer Balances and
+              // Ledger Statement are all-time, never date-scoped, so the
+              // 7/30/90-day range label doesn't belong on their printed sheet either.
+              (activeTab !== "outstanding_dues" && activeTab !== "ledger_statement") ? rangeLabel : "",
+              includeGraphsInPrint
+            )}
               className="flex items-center gap-1.5 border border-gray-300 text-gray-600 px-4 py-2 rounded-lg text-sm hover:bg-gray-50">
               🖨️ Print
             </button>
@@ -444,7 +481,7 @@ export default function CustomerReports() {
           <div className="space-y-4">
 
             {/* Search + Region filter bar */}
-            <div className="flex flex-wrap gap-3 items-center">
+            <div className="flex flex-wrap gap-3 items-center print-hide">
               <div className="relative flex-1 min-w-[200px] max-w-sm">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
                 <input
@@ -462,15 +499,20 @@ export default function CustomerReports() {
               >
                 {dueRegions.map((r) => <option key={r}>{r}</option>)}
               </select>
+              <label className="flex items-center gap-2 text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-2 cursor-pointer select-none hover:border-gray-400">
+                <input type="checkbox" checked={dueOnly} onChange={(e) => setDueOnly(e.target.checked)}
+                  className="rounded border-gray-300" />
+                Only customers with due
+              </label>
               <span className="text-sm text-gray-400 ml-auto">
                 {filteredDueData.length} of {allCustomerBalances.length} customers
-                {dueRegion !== "All" || dueSearch ? ` · filtered` : ""}
+                {dueRegion !== "All" || dueSearch || dueOnly ? ` · filtered` : ""}
               </span>
             </div>
 
             {/* Top dues bar chart — only when not searching */}
             {!dueSearch && dueData.length > 0 && (
-              <div className="bg-white rounded-2xl shadow-sm p-5">
+              <div className="bg-white rounded-2xl shadow-sm p-5 report-chart-block">
                 <h3 className="text-sm font-semibold text-gray-700 mb-4">
                   Top 15 — Highest Outstanding Balance
                   {dueRegion !== "All" && <span className="text-orange-500 font-normal ml-1">· {dueRegion}</span>}
@@ -495,7 +537,7 @@ export default function CustomerReports() {
 
             {/* Full customer balance table */}
             <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
-              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between flex-wrap gap-2">
+              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between flex-wrap gap-2 print-hide">
                 <div>
                   <h3 className="text-sm font-semibold text-gray-700">
                     All Customer Balances
@@ -514,9 +556,21 @@ export default function CustomerReports() {
                       <th className="px-5 py-3 text-left">Owner</th>
                       <th className="px-5 py-3 text-left">Phone</th>
                       <th className="px-5 py-3 text-left">Region</th>
+                      <th className="px-5 py-3 text-left">Area</th>
                       <th className="px-5 py-3 text-right">Balance Due</th>
                       <th className="px-5 py-3 text-right">Credit Limit</th>
-                      <th className="px-5 py-3 text-center">Status</th>
+                      <th className="px-5 py-3 text-center print-hide">Status</th>
+                      {/* Screen shows the Status column above. On the printed
+                          sheet that column is replaced with a blank writable
+                          box instead (see .print-write-box, injected only
+                          into the print window's stylesheet) — this sheet is
+                          meant to be handed to the delivery person to write
+                          down cash actually collected from each shop. Uses
+                          Tailwind's `hidden` utility, which only has an effect
+                          on the live app (no Tailwind stylesheet is loaded in
+                          the print popup), so this cell is invisible here but
+                          appears in print. */}
+                      <th className="px-5 py-3 text-center hidden">Collected (₹)</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -526,13 +580,13 @@ export default function CustomerReports() {
                         <td className="px-5 py-3 text-gray-400 text-xs">{i + 1}</td>
                         <td className="px-5 py-3">
                           <p className="font-medium text-gray-800">{c.shopName}</p>
-                          {c.area && c.area !== "—" && <p className="text-xs text-gray-400">{c.area}</p>}
                         </td>
                         <td className="px-5 py-3 text-gray-600 text-xs">{c.ownerName}</td>
                         <td className="px-5 py-3 text-gray-600 text-xs font-mono">{c.phone}</td>
                         <td className="px-5 py-3">
                           <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full">{c.region}</span>
                         </td>
+                        <td className="px-5 py-3 text-gray-600 text-xs">{c.area && c.area !== "—" ? c.area : "—"}</td>
                         <td className="px-5 py-3 text-right">
                           {c.due > 0 ? (
                             <span className={`font-bold text-base ${c.overLimit ? "text-red-600" : "text-orange-600"}`}>
@@ -545,13 +599,17 @@ export default function CustomerReports() {
                         <td className="px-5 py-3 text-right text-gray-400 text-xs">
                           {c.creditLimit ? formatCurrency(c.creditLimit) : "—"}
                         </td>
-                        <td className="px-5 py-3 text-center">
+                        <td className="px-5 py-3 text-center print-hide">
                           {c.due <= 0
                             ? <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">Clear</span>
                             : c.overLimit
                             ? <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-medium">⚠ Over Limit</span>
                             : <span className="text-xs bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full font-medium">Due</span>
                           }
+                        </td>
+                        {/* Print-only blank box — see comment on the header cell above. */}
+                        <td className="px-5 py-3 text-center hidden">
+                          <span className="print-write-box" />
                         </td>
                       </tr>
                     ))}
@@ -562,7 +620,7 @@ export default function CustomerReports() {
                     return (
                       <tfoot className="bg-orange-50 border-t-2 border-orange-200">
                         <tr>
-                          <td colSpan={5} className="px-5 py-3 font-bold text-gray-700">
+                          <td colSpan={6} className="px-5 py-3 font-bold text-gray-700">
                             Total ({filteredDueData.length} customers · {filteredDueCount} with due)
                           </td>
                           <td className="px-5 py-3 text-right font-bold text-red-600 text-base">
@@ -600,7 +658,7 @@ export default function CustomerReports() {
                 </button>
               ))}
             </div>
-            <div className="bg-white rounded-2xl shadow-sm p-5">
+            <div className="bg-white rounded-2xl shadow-sm p-5 report-chart-block">
               <h3 className="text-sm font-semibold text-gray-700 mb-4">Top {topN} Customers by Revenue</h3>
               <ResponsiveContainer width="100%" height={Math.min(topN * 28, 400)}>
                 <BarChart data={topCustomerData} layout="vertical" margin={{ top: 0, right: 10, left: 0, bottom: 0 }}>
@@ -631,7 +689,7 @@ export default function CustomerReports() {
         {activeTab === "order_frequency" && (
           <div className="space-y-5">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="bg-white rounded-2xl shadow-sm p-5">
+              <div className="bg-white rounded-2xl shadow-sm p-5 report-chart-block">
                 <h3 className="text-sm font-semibold text-gray-700 mb-4">Order Frequency Distribution</h3>
                 <ResponsiveContainer width="100%" height={220}>
                   <BarChart data={frequencyBuckets} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
@@ -682,7 +740,7 @@ export default function CustomerReports() {
         {activeTab === "by_region" && (
           <div className="space-y-5">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="bg-white rounded-2xl shadow-sm p-5">
+              <div className="bg-white rounded-2xl shadow-sm p-5 report-chart-block">
                 <h3 className="text-sm font-semibold text-gray-700 mb-4">Revenue by Region</h3>
                 <ResponsiveContainer width="100%" height={240}>
                   <BarChart data={regionData} layout="vertical" margin={{ top: 0, right: 10, left: 0, bottom: 0 }}>
@@ -696,7 +754,7 @@ export default function CustomerReports() {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-              <div className="bg-white rounded-2xl shadow-sm p-5">
+              <div className="bg-white rounded-2xl shadow-sm p-5 report-chart-block">
                 <h3 className="text-sm font-semibold text-gray-700 mb-4">Customer Share by Region</h3>
                 <ResponsiveContainer width="100%" height={240}>
                   <PieChart>

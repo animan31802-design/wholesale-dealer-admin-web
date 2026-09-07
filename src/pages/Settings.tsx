@@ -30,6 +30,18 @@ export interface BusinessSettings {
   // Hours a minimized/floating billing draft is kept before it's considered
   // stale (greyed out) and eventually auto-discarded. Configurable per business.
   draftBillExpiryHours?: number;
+  // Whether chart/graph visuals (bar charts, pie charts, etc.) are included
+  // when printing reports. Applies wherever a report's print output is built
+  // by cloning the on-screen page (currently: CustomerReports.tsx — its
+  // Customer Balances / Top Customers / Order Frequency / By Region tabs all
+  // print via a shared #cr-print-area DOM clone that includes any charts on
+  // screen). Reports that print by generating a table straight from data
+  // (Finance, Orders, Stock, Staff Attendance, Agent reports) never include
+  // charts either way, since they build print output from rows, not a DOM
+  // screenshot — this setting has no effect on those. Defaults to true
+  // (unchanged prior behaviour) so existing prints don't change until an
+  // admin explicitly turns it off.
+  includeGraphsInPrint?: boolean;
 }
 
 const EMPTY: BusinessSettings = {
@@ -42,6 +54,7 @@ const EMPTY: BusinessSettings = {
   defaultQrMode: "without_amount", defaultPaperSize: "a4",
   chargeDiscountTypes: [],
   draftBillExpiryHours: 3,
+  includeGraphsInPrint: true,
 };
 
 export async function getBusinessSettings(): Promise<BusinessSettings> {
@@ -381,6 +394,32 @@ export default function Settings() {
               <p className="text-xs text-gray-400 mt-1">Default is 3 hours. Applies to all agents.</p>
             </Field>
           </div>
+        </Section>
+
+        {/* ── Reports & Printing ───────────────────────────────────────── */}
+        <Section title="Reports & Printing">
+          <Field label="Charts in Printed Reports">
+            <div className="flex gap-2">
+              {([true, false] as const).map(v => (
+                <button key={String(v)} type="button"
+                  onClick={() => setForm(f => ({ ...f, includeGraphsInPrint: v }))}
+                  className={`flex-1 py-2.5 rounded-xl border-2 text-sm font-semibold transition-all ${
+                    (form.includeGraphsInPrint ?? true) === v
+                      ? "border-orange-500 bg-orange-50 text-orange-700"
+                      : "border-gray-200 text-gray-500 hover:border-gray-300"
+                  }`}>
+                  {v ? "Include" : "Exclude"}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-gray-400 mt-1">
+              {(form.includeGraphsInPrint ?? true)
+                ? "Bar/pie charts print along with the data table."
+                : "Only the data table prints — charts are left out to save paper/ink."}
+              {" "}Applies to Customer Reports (Balances, Top Customers, Order Frequency, By Region).
+              Other reports already print as tables only, so this has no effect on them.
+            </p>
+          </Field>
         </Section>
 
         {/* ── Charges & Discounts ───────────────────────────────────────── */}
