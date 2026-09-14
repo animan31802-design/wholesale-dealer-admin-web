@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from "react";
+import { useEffect, useState, useMemo, useRef, Fragment } from "react";
 import * as XLSX from "xlsx";
 import {
   collection, getDocs, addDoc, updateDoc,
@@ -544,6 +544,10 @@ function LedgerModal({ customer, isAdmin, onClose }: {
   const [loading, setLoading]     = useState(true);
   const [tab, setTab]             = useState<"ledger" | "orders" | "payment" | "adjust">("ledger");
   const [custOrders, setCustOrders] = useState<Order[]>([]);
+  // Which ledger rows are showing their per-order breakdown (see .allocations
+  // on LedgerEntry) — keyed by entry id. Only entries with 2+ allocations get
+  // an expand toggle at all; a single-order payment has nothing to expand.
+  const [expandedLedgerRows, setExpandedLedgerRows] = useState<Set<string>>(new Set());
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [amount, setAmount]       = useState("");
   const [note, setNote]           = useState("");
@@ -570,27 +574,6 @@ function LedgerModal({ customer, isAdmin, onClose }: {
     setLoading(true);
     try {
       let data = await getLedger(customer.id!);
-
-      // ── Dedup: remove duplicate entries for the same orderId+type written by
-      //    a previous buggy backfill run. Keep only the first entry per orderId+type.
-      if (data.length > 0) {
-        const seen = new Set<string>();
-        const { deleteDoc: dd, doc: fdoc } = await import("firebase/firestore");
-        for (const entry of data) {
-          if (!entry.orderId) continue;
-          const key = entry.orderId + "__" + entry.type + "__" + entry.direction;
-          if (seen.has(key)) {
-            // Duplicate — delete it from Firestore
-            try {
-              await dd(fdoc(db, "customers", customer.id!, "payments", entry.id!));
-            } catch (_) {}
-          } else {
-            seen.add(key);
-          }
-        }
-        // Re-fetch cleaned data
-        data = await getLedger(customer.id!);
-      }
 
       // ── Backfill: if ledger is empty but customer has orders,
       //    auto-generate ledger entries so history shows up correctly.
@@ -773,10 +756,7 @@ function LedgerModal({ customer, isAdmin, onClose }: {
         // sync, which is what every report and the order drawer read from.
         await applyPaymentToOrders(
           customer.id!,
-          selectedOrdersOldestFirst.map((o) => ({
-            id: o.id!, totalAmount: o.totalAmount,
-            amountCollected: o.amountCollected, adminCollected: (o as any).adminCollected,
-          })),
+          selectedOrdersOldestFirst.map((o) => o.id!),
           amt,
           paymentMode,
           note.trim(),
@@ -884,52 +864,101 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                 <p className="text-sm mt-1">Orders and payments will appear here</p>
               </div>
             ) : (
-              <table className="w-full text-sm">
+              <table className="w-full text-sm table-fixed">
+                <colgroup>
+                  <col className="w-[88px]" />
+                  <col className="w-[104px]" />
+                  <col />
+                  <col className="w-[76px]" />
+                  <col className="w-[76px]" />
+                  <col className="w-[92px]" />
+                </colgroup>
                 <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide sticky top-0">
                   <tr>
-                    <th className="px-5 py-3 text-left">Date</th>
-                    <th className="px-5 py-3 text-left">Type</th>
-                    <th className="px-5 py-3 text-left">Note</th>
-                    <th className="px-5 py-3 text-right">Debit</th>
-                    <th className="px-5 py-3 text-right">Credit</th>
-                    <th className="px-5 py-3 text-right">Balance</th>
+                    <th className="px-3 py-3 text-left">Date</th>
+                    <th className="px-3 py-3 text-left">Type</th>
+                    <th className="px-3 py-3 text-left">Note</th>
+                    <th className="px-3 py-3 text-right">Debit</th>
+                    <th className="px-3 py-3 text-right">Credit</th>
+                    <th className="px-3 py-3 text-right">Balance</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {displayRows.map((e) => (
-                    <tr key={e.id} className="hover:bg-gray-50">
-                      <td className="px-5 py-3 text-gray-500 whitespace-nowrap">
-                        {new Date(e.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
-                      </td>
-                      <td className="px-5 py-3">
-                        <span className={`text-xs font-medium px-2 py-1 rounded-full ${
-                          e.direction === "debit"
-                            ? "bg-red-100 text-red-700"
-                            : "bg-green-100 text-green-700"
-                        }`}>
-                          {ENTRY_LABELS[e.type] || e.type}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3 text-gray-500 text-xs max-w-[160px]">
-                        <p>{e.note || "—"}</p>
-                        <p className="text-gray-400">{e.createdByName}</p>
-                      </td>
-                      <td className="px-5 py-3 text-right text-red-600 font-medium">
-                        {e.direction === "debit" ? `₹${e.amount.toFixed(2)}` : "—"}
-                      </td>
-                      <td className="px-5 py-3 text-right text-green-600 font-medium">
-                        {e.direction === "credit" ? `₹${e.amount.toFixed(2)}` : "—"}
-                      </td>
-                      <td className={`px-5 py-3 text-right font-bold ${e.running > 0 ? "text-red-600" : "text-green-600"}`}>
-                        ₹{e.running.toFixed(2)}
-                      </td>
-                    </tr>
-                  ))}
+                  {displayRows.map((e) => {
+                    // A payment split across 2+ orders carries the breakdown
+                    // in .allocations (see applyPaymentToOrders). Older
+                    // entries, and single-order payments, have at most one —
+                    // nothing to expand, so no toggle is shown for those.
+                    const splitCount = e.allocations?.length ?? 0;
+                    const expandable = splitCount > 1;
+                    const expanded = expandable && expandedLedgerRows.has(e.id!);
+                    return (
+                    <Fragment key={e.id}>
+                      <tr
+                        className={`hover:bg-gray-50 ${expandable ? "cursor-pointer" : ""}`}
+                        onClick={() => {
+                          if (!expandable) return;
+                          setExpandedLedgerRows((prev) => {
+                            const next = new Set(prev);
+                            next.has(e.id!) ? next.delete(e.id!) : next.add(e.id!);
+                            return next;
+                          });
+                        }}
+                      >
+                        <td className="px-3 py-3 text-gray-500 text-xs whitespace-nowrap">
+                          {new Date(e.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                        </td>
+                        <td className="px-3 py-3">
+                          <span className={`text-xs font-medium px-2 py-1 rounded-full inline-block ${
+                            e.direction === "debit"
+                              ? "bg-red-100 text-red-700"
+                              : "bg-green-100 text-green-700"
+                          }`}>
+                            {ENTRY_LABELS[e.type] || e.type}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3 text-gray-500 text-xs">
+                          <p className="break-words flex items-start gap-1">
+                            {expandable && (
+                              <span className="text-gray-400 flex-shrink-0">{expanded ? "▾" : "▸"}</span>
+                            )}
+                            <span>{e.note || "—"}{expandable && !expanded && ` (${splitCount} bills)`}</span>
+                          </p>
+                          <p className="text-gray-400">{e.createdByName}</p>
+                        </td>
+                        <td className="px-3 py-3 text-right text-red-600 font-medium text-xs">
+                          {e.direction === "debit" ? `₹${e.amount.toFixed(2)}` : "—"}
+                        </td>
+                        <td className="px-3 py-3 text-right text-green-600 font-medium text-xs">
+                          {e.direction === "credit" ? `₹${e.amount.toFixed(2)}` : "—"}
+                        </td>
+                        <td className={`px-3 py-3 text-right font-bold text-xs ${e.running > 0 ? "text-red-600" : "text-green-600"}`}>
+                          ₹{e.running.toFixed(2)}
+                        </td>
+                      </tr>
+                      {expanded && (
+                        <tr className="bg-gray-50/70">
+                          <td />
+                          <td colSpan={5} className="px-3 pb-3 pt-0">
+                            <div className="border border-gray-200 rounded-lg bg-white divide-y divide-gray-100 ml-4">
+                              {e.allocations!.map((a, i) => (
+                                <div key={i} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                                  <span className="text-gray-500">Order #{a.orderNo}</span>
+                                  <span className="font-medium text-green-600">₹{a.amountApplied.toFixed(2)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                    );
+                  })}
                 </tbody>
                 <tfoot className="bg-gray-50 border-t border-gray-200">
                   <tr>
-                    <td colSpan={5} className="px-5 py-3 text-sm font-semibold text-gray-700">Current Balance</td>
-                    <td className={`px-5 py-3 text-right font-bold text-lg ${balance > 0 ? "text-red-600" : "text-green-600"}`}>
+                    <td colSpan={5} className="px-3 py-3 text-sm font-semibold text-gray-700">Current Balance</td>
+                    <td className={`px-3 py-3 text-right font-bold text-lg ${balance > 0 ? "text-red-600" : "text-green-600"}`}>
                       ₹{balance.toFixed(2)}
                     </td>
                   </tr>

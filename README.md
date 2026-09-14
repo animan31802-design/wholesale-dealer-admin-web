@@ -1,20 +1,24 @@
-# Wholesale dealer fixes: dev-access reconciliation tool, mandatory order-linked payments, collections date-accuracy fix, and Customer Balance report improvements
+# Wholesale dealer fixes: dev-access reconciliation tool, mandatory order-linked payments, collections date-accuracy fix, Customer Balance report improvements, and the ledger data-integrity investigation
 
 ## Files changed
 - `src/types/index.ts` — adds `AppUser.devAccess`, `DevReconciliationEntry`,
   `Order.devReconciliations` / `lastDevReconciledAt` / `lastDevReconciledBy` / `lastDevReconciledByName`,
   and `Order.lastPaymentAt`.
-- `src/utils/ledger.ts` — adds `devReconcileOrderPayment()`; `applyPaymentToOrders()` now also stamps `lastPaymentAt`.
-- `src/pages/Orders.tsx` — adds the "🛠 Mark as Paid (dev reconciliation)" button + modal, visible on any order status.
-- `src/pages/Customers.tsx` — Record Payment tab now auto-selects unpaid orders (oldest-first) to match the
-  entered amount, and makes order-linking **mandatory** whenever the customer has unpaid orders. See §5 below.
+- `src/types/ledger.ts` — adds `LedgerPaymentAllocation` and `LedgerEntry.allocations`. See §9.
+- `src/utils/ledger.ts` — adds `devReconcileOrderPayment()`; `applyPaymentToOrders()` rewritten to write
+  ONE grouped ledger entry per payment (re-reading every order fresh inside its own transaction). See §9.
+- `src/pages/Orders.tsx` — adds the "🛠 Mark as Paid (dev reconciliation)" button + modal, visible on any order
+  status; `recordSingleOrderPayment` call updated for the new signature.
+- `src/pages/Customers.tsx` — Record Payment tab auto-selects/mandatory-links unpaid orders (§5); **removes the
+  ledger dedup-on-view logic that was silently deleting real transaction history** (§9); Ledger tab now renders
+  grouped payments with an expand/collapse breakdown, and its table no longer needs a horizontal scrollbar.
 - `src/pages/FinanceReports.tsx` — Collections Report and Payment Mode Breakdown now bucket by actual payment
-  date (`lastPaymentAt`), not order-creation date. See §6 below.
+  date (`lastPaymentAt`), not order-creation date. See §6.
 - `src/pages/CreateOrderPage.tsx` — stamps `lastPaymentAt` when an advance is collected at order creation.
 - `src/pages/CustomerReports.tsx` — Customer Balances tab gets an Area column, a "Only customers with due"
-  filter, and print output now respects the new chart setting. See §7 below.
+  filter, print output respects the chart setting, and the misleading date-range label is gone. See §7, §8.
 - `src/pages/Settings.tsx` — new "Reports & Printing" setting: Include/Exclude charts in printed reports.
-  See §7 below.
+  See §7.
 
 `tsc --noEmit` and `npm run build` both pass clean with these changes on top of your uploaded code.
 See `CHANGES.diff` for a reviewable unified diff of exactly what moved.
@@ -230,3 +234,80 @@ on the printed page) was always fed `rangeLabel` regardless of which tab was ope
 now blank for Customer Balances and Ledger Statement (the same two all-time tabs), and
 the subtitle line itself is only rendered when there's something to show, so there's no
 leftover empty line on the printed sheet.
+
+## 9. Ledger data-integrity investigation — root causes found and fixed
+
+This came from a real customer (Pandu Store, phone 9965653341) whose ledger showed
+₹71,180 due while the Customers list and Orders tab agreed on ₹65,810, and the client
+separately confirmed the true due was ₹68,495. Full details of the investigation are in
+the conversation; summarizing the two root causes found and fixed here.
+
+### Bug 1 (the big one): a "dedup" cleanup routine was deleting real payments
+
+`Customers.tsx`'s `fetchLedger()` ran this every single time anyone opened a customer's
+Ledger tab:
+
+```js
+// kept only the FIRST ledger entry per (orderId + type + direction) combination —
+// every entry after the first with the same key was deleted from Firestore
+```
+
+The key had no date, no amount, no ID — just `orderId + type + direction`. Any time the
+*same order* received a payment across two separate sessions (completely normal for a
+credit customer paying an old bill in installments), the second entry collided with the
+first and got silently deleted. `outstandingDue` and the order itself were already
+correct by the time this ran (both are updated at the moment a payment is written) — only
+the ledger's own historical record of the transaction was destroyed. This is **removed
+entirely** — it was already in the code you uploaded, not something introduced by our
+earlier work.
+
+### Bug 2: `applyPaymentToOrders` computed allocations from stale, pre-fetched data
+
+The old version calculated how much to apply to each order using whatever
+`amountCollected` the caller's browser already had in memory, *before* opening the
+Firestore transaction — it never re-read the order fresh at write time. Traced through
+this same customer's real data, this is what let a second payment (minutes after the
+first) re-apply money to an order that had *just* been settled, resulting in a genuine
+over-credit — not just a missing ledger record, but ₹2,685 credited to an order the
+customer never actually paid that amount for.
+
+**Fixed:** `applyPaymentToOrders` now does all its reads (customer + every target order)
+*inside* the transaction, computes allocations from that live data, and — critically —
+**aborts with a clear error** if the live balances can't absorb the full amount typed
+(e.g. because something else already settled part of it in the meantime), instead of
+silently dropping the leftover or applying it somewhere the admin didn't choose. A stale
+tab or accidental double-submit now fails loudly and asks the admin to refresh, rather
+than quietly corrupting a balance.
+
+### The data-model change you asked for: one ledger entry per payment
+
+Previously a single payment split across N orders wrote N separate top-level ledger
+rows — which is also exactly what made the dedup bug possible to trigger in the first
+place. Now `applyPaymentToOrders` writes **one** entry for the whole amount received,
+with a `allocations: [{ orderId, orderNo, amountApplied }]` breakdown attached.
+
+- The Ledger tab shows one row per payment. If it covers 2+ orders, a ▸/▾ toggle appears
+  in the Note column (click the row) revealing each order's real order number and the
+  amount applied to it.
+- The collapsed row's note defaults to: `"...for order #<no>"` for one order,
+  `"...settled orders #<no1> + #<no2>"` for two, `"...settled N orders (see breakdown)"`
+  for three or more — always using the real `orderNo`, never the old truncated-ID format.
+- This applies everywhere a payment is written from the app — the Customers → Payment
+  tab and the Orders drawer's single-order "Record Payment" both go through the same
+  `applyPaymentToOrders`, so they're consistent (a single-order payment just has one
+  allocation, so no toggle shows for it — nothing to expand).
+- **Old entries are untouched** — they'll keep showing as separate rows forever, exactly
+  as they are now. Only new payments going forward use the grouped format.
+
+### Ledger tab horizontal scrollbar — fixed
+
+The table now uses a fixed column-width layout (`table-fixed` + explicit widths) with
+text wrapping instead of relying on natural content width, so it fits inside the modal
+without needing to scroll horizontally at all.
+
+### What this does NOT do
+
+None of this retroactively repairs Pandu Store's own numbers — `outstandingDue` is
+still sitting at ₹65,810 instead of the confirmed-correct ₹68,495. That's a one-time
+manual data correction (not a code change), separate from these fixes, and still
+outstanding — let me know when you want that done.

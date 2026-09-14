@@ -200,69 +200,110 @@ export async function recordManualPayment(
 // of recordManualPayment) left that field stale, which is the root cause of
 // orders showing "Balance Due" / "Pending" even after being paid.
 //
-// Given a customer + an ordered list of target orders (oldest-first) and a
-// total amount received, this fills each order's remaining balance in turn
-// — fully settling earlier orders before any amount spills into the next —
-// and writes one ledger entry per order actually touched (so the ledger
-// stays traceable back to specific orders), plus a single customer
-// outstandingDue reduction for the whole amount, all in one transaction.
+// Given a customer + an ordered list of target order IDs (oldest-first) and
+// a total amount received, this fills each order's remaining balance in
+// turn — fully settling earlier orders before any amount spills into the
+// next — and writes ONE ledger entry for the whole payment (with a
+// per-order `allocations` breakdown), plus a single customer outstandingDue
+// reduction, all in one transaction.
+//
+// Every order is re-read fresh INSIDE the transaction (see READ PHASE
+// below) rather than trusting amountCollected/adminCollected the caller's
+// browser saw moments ago. A real bug traced through a live customer's data
+// showed exactly what goes wrong without this: a payment submitted minutes
+// after an earlier one, from a browser that hadn't refreshed, silently
+// re-applied money to an order that had already been settled — the order
+// ended up credited for more than was ever actually paid. Reading fresh
+// inside the transaction, and aborting if the live balances can't absorb
+// the full amount (see the `remaining > 0` check), closes that gap: a
+// stale or duplicate submission now fails loudly instead of quietly
+// over-crediting an order.
 export interface OrderPaymentAllocation {
   orderId: string;
+  orderNo?: string;
   amountApplied: number;   // ₹ applied to this order from the payment
   newAmountCollected: number;
   fullySettled: boolean;
 }
 
+function defaultPaymentNote(paymentMode: string, allocations: OrderPaymentAllocation[]): string {
+  const nos = allocations.map((a) => a.orderNo || a.orderId.slice(0, 8).toUpperCase());
+  if (nos.length === 1) return `Payment (${paymentMode}) collected for order #${nos[0]}`;
+  if (nos.length === 2) return `Payment (${paymentMode}) settled orders #${nos[0]} + #${nos[1]}`;
+  return `Payment (${paymentMode}) settled ${nos.length} orders (see breakdown)`;
+}
+
 export async function applyPaymentToOrders(
   customerId: string,
-  targetOrders: Array<{ id: string; totalAmount: number; amountCollected?: number; adminCollected?: number }>,
+  orderIds: string[],   // oldest-first — caller controls fill order
   totalAmountReceived: number,
   paymentMode: "cash" | "upi" | "bank" | "cheque" | "credit",
   note: string,
   adminId: string,
   adminName: string
 ): Promise<OrderPaymentAllocation[]> {
-  if (totalAmountReceived <= 0) return [];
+  if (totalAmountReceived <= 0 || orderIds.length === 0) return [];
 
-  // Oldest-first: caller is expected to have already sorted `targetOrders`,
-  // but we don't rely on that — sort defensively isn't possible here since
-  // we don't have createdAt in this minimal shape, so callers MUST pass
-  // orders already in the order they want filled (oldest first).
-  let remaining = totalAmountReceived;
-  const allocations: OrderPaymentAllocation[] = [];
+  return runTransaction(db, async (t) => {
+    const custRef = doc(db, "customers", customerId);
 
-  for (const o of targetOrders) {
-    if (remaining <= 0) break;
-    const alreadyCollected = o.amountCollected ?? 0;
-    const balance = Math.max(0, round2(o.totalAmount - alreadyCollected));
-    if (balance <= 0) continue; // already fully paid, skip
-
-    const applied = Math.min(balance, remaining);
-    remaining = round2(remaining - applied);
-    const newAmountCollected = round2(alreadyCollected + applied);
-
-    allocations.push({
-      orderId: o.id,
-      amountApplied: applied,
-      newAmountCollected,
-      fullySettled: newAmountCollected >= o.totalAmount - 0.01,
-    });
-  }
-
-  if (allocations.length === 0) return [];
-
-  await runTransaction(db, async (t) => {
-    const custRef  = doc(db, "customers", customerId);
+    // ── READ PHASE — every read must happen before any write in a Firestore
+    // transaction, so the customer doc and every target order are fetched
+    // fresh here, live, right before we decide how to allocate the money.
     const custSnap = await t.get(custRef);
     if (!custSnap.exists()) throw new Error("Customer not found");
 
+    const orderRefs  = orderIds.map((id) => doc(db, "orders", id));
+    const orderSnaps = await Promise.all(orderRefs.map((ref) => t.get(ref)));
+    const snapByOrderId = new Map(orderIds.map((id, i) => [id, orderSnaps[i]]));
+
+    let remaining = round2(totalAmountReceived);
+    const allocations: OrderPaymentAllocation[] = [];
+
+    for (const orderId of orderIds) {
+      if (remaining <= 0) break;
+      const snap = snapByOrderId.get(orderId)!;
+      if (!snap.exists()) continue; // shouldn't happen, but don't fail the whole payment over it
+      const order = snap.data() as Order;
+      const alreadyCollected = order.amountCollected ?? 0;
+      const balance = Math.max(0, round2(order.totalAmount - alreadyCollected));
+      if (balance <= 0) continue; // already fully settled (by this transaction's live read) — skip
+
+      const applied = Math.min(balance, remaining);
+      remaining = round2(remaining - applied);
+      const newAmountCollected = round2(alreadyCollected + applied);
+
+      allocations.push({
+        orderId,
+        orderNo: order.orderNo,
+        amountApplied: applied,
+        newAmountCollected,
+        fullySettled: newAmountCollected >= order.totalAmount - 0.01,
+      });
+    }
+
+    if (allocations.length === 0) {
+      throw new Error("None of the selected orders could be settled — they may already have been paid by another transaction. Please refresh and try again.");
+    }
+    // The amount was validated against balances the browser had a moment
+    // ago; if live data now shows less due than that (another payment, a
+    // dev reconciliation, or a duplicate submission already settled some of
+    // it), abort rather than silently dropping the extra money or applying
+    // it somewhere the admin never chose.
+    if (remaining > 0.01) {
+      throw new Error(
+        `₹${remaining.toFixed(2)} of this payment couldn't be matched to a remaining balance — the selected order(s) may have just been settled elsewhere. Please refresh and try again before re-entering the payment.`
+      );
+    }
+
+    // ── WRITE PHASE ──
     const currentDue: number = custSnap.data().outstandingDue || 0;
     const totalApplied = round2(allocations.reduce((s, a) => s + a.amountApplied, 0));
     const newDue = Math.max(0, round2(currentDue - totalApplied));
 
     for (const alloc of allocations) {
       const orderRef = doc(db, "orders", alloc.orderId);
-      const order = targetOrders.find((o) => o.id === alloc.orderId)!;
+      const order = snapByOrderId.get(alloc.orderId)!.data() as Order;
       const priorAdminCollected = order.adminCollected ?? 0;
       t.update(orderRef, {
         amountCollected: alloc.newAmountCollected,
@@ -271,24 +312,35 @@ export async function applyPaymentToOrders(
         paymentMode,
         lastPaymentAt: new Date().toISOString(),
       });
-
-      const entryRef = doc(ledgerCol(customerId));
-      t.set(entryRef, {
-        type: "manual_payment",
-        direction: "credit",
-        amount: alloc.amountApplied,
-        orderId: alloc.orderId,
-        note: note || `Payment (${paymentMode}) collected for order #${alloc.orderId.slice(0, 8).toUpperCase()}`,
-        createdBy: adminId,
-        createdByName: adminName,
-        createdAt: new Date().toISOString(),
-      });
     }
 
-    t.update(custRef, { outstandingDue: newDue });
-  });
+    // ── ONE ledger entry for the entire payment ──────────────────────
+    // Previously this wrote one full row per order touched, which is also
+    // what let a now-removed dedup-on-view routine mistake a second,
+    // legitimate payment against the same order for a duplicate and
+    // silently delete it. One entry per payment, with the breakdown living
+    // in `allocations`, removes that collision entirely — see the Ledger
+    // tab's expand/collapse in Customers.tsx.
+    const entryRef = doc(ledgerCol(customerId));
+    t.set(entryRef, {
+      type: "manual_payment",
+      direction: "credit",
+      amount: totalApplied,
+      allocations: allocations.map((a) => ({
+        orderId: a.orderId,
+        orderNo: a.orderNo || a.orderId.slice(0, 8).toUpperCase(),
+        amountApplied: a.amountApplied,
+      })),
+      note: note || defaultPaymentNote(paymentMode, allocations),
+      createdBy: adminId,
+      createdByName: adminName,
+      createdAt: new Date().toISOString(),
+    });
 
-  return allocations;
+    t.update(custRef, { outstandingDue: newDue });
+
+    return allocations;
+  });
 }
 
 // Convenience wrapper for the common single-order "Record Payment" action
@@ -296,7 +348,7 @@ export async function applyPaymentToOrders(
 // fully or partially).
 export async function recordSingleOrderPayment(
   customerId: string,
-  order: { id: string; totalAmount: number; amountCollected?: number; adminCollected?: number },
+  orderId: string,
   amount: number,
   paymentMode: "cash" | "upi" | "bank" | "cheque" | "credit",
   note: string,
@@ -304,7 +356,7 @@ export async function recordSingleOrderPayment(
   adminName: string
 ): Promise<OrderPaymentAllocation | null> {
   const result = await applyPaymentToOrders(
-    customerId, [order], amount, paymentMode, note, adminId, adminName
+    customerId, [orderId], amount, paymentMode, note, adminId, adminName
   );
   return result[0] ?? null;
 }

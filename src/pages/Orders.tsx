@@ -2166,7 +2166,7 @@ function RecordPaymentModal({ order, onClose, onDone }: {
     try {
       await recordSingleOrderPayment(
         order.customerId,
-        { id: order.id, totalAmount: order.totalAmount, amountCollected: order.amountCollected, adminCollected: (order as any).adminCollected },
+        order.id,
         amountNum,
         mode,
         note.trim(),
