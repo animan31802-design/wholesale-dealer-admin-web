@@ -1,0 +1,392 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isLoggedIn() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function getUserRole() {
+      return getUserData().role;
+    }
+
+    function isAdmin() {
+      return isLoggedIn() && getUserRole() == 'admin';
+    }
+
+    function isPackingStaff() {
+      return isLoggedIn() && getUserRole() == 'packing_staff';
+    }
+
+    function isFieldAgent() {
+      return isLoggedIn() && getUserRole() == 'field_agent';
+    }
+
+    function isDelivery() {
+      return isLoggedIn() && getUserRole() == 'delivery';
+    }
+
+    function isAdminOrPacking() {
+      return isAdmin() || isPackingStaff();
+    }
+
+    // ── Platform subscription (added) ─────────────────────────────
+    // Which tenant the signed-in user belongs to. Today every user is in
+    // the single tenant "main"; later users get a tenantId field.
+    function myTenantId() {
+      return getUserData().get('tenantId', 'main');
+    }
+
+    // Read-only lock: a tenant doc that doesn't exist, or has
+    // subscriptionRequired != true, is never locked. Otherwise writes are
+    // allowed only until subscriptionAccessUntil (end date + grace, set by
+    // the platform admin), checked against SERVER time. Mirrors
+    // isSubscriptionLocked() in src/lib/subscription.ts.
+    function subscriptionOk() {
+      let tenantPath = /databases/$(database)/documents/tenants/$(myTenantId());
+      return !exists(tenantPath) ||
+             get(tenantPath).data.get('subscriptionRequired', false) != true ||
+             request.time.toMillis() < get(tenantPath).data.get('subscriptionAccessUntil', 0);
+    }
+
+    // Separate platform-admin login: has a /platformAdmins/{uid} doc and
+    // NO /users doc (created by hand in the Firebase console).
+    function isPlatformAdmin() {
+      return isLoggedIn() &&
+             exists(/databases/$(database)/documents/platformAdmins/$(request.auth.uid));
+    }
+
+    // Amount + months on a payment request must match what the platform
+    // admin published: the tenant's own /tenantPricing doc if it has one,
+    // otherwise /platform/defaultPricing.
+    function planMatches(plans, data) {
+      return data.planId in plans &&
+             data.amount == plans[data.planId].price &&
+             data.months == plans[data.planId].months;
+    }
+
+    function matchesPublishedPlan(data) {
+      let ownPath = /databases/$(database)/documents/tenantPricing/$(data.tenantId);
+      let defaultPath = /databases/$(database)/documents/platform/defaultPricing;
+      return (exists(ownPath) && planMatches(get(ownPath).data.plans, data)) ||
+             (!exists(ownPath) && planMatches(get(defaultPath).data.plans, data));
+    }
+
+    // ── App Config (version check) ────────────────────────────────
+    // NEW — must be readable even before login completes, since the
+    // version check runs at app launch (MainActivity), before any auth
+    // state is necessarily established. Write is admin-only since you
+    // are updating this manually via the Firebase console.
+    match /app_config/{docId} {
+      allow read:  if true;
+      allow write: if isAdmin();
+    }
+
+    // ── Users ────────────────────────────────────────────────────
+    match /users/{userId} {
+      allow read:   if isLoggedIn() && (request.auth.uid == userId || isAdmin());
+      // Adding users is blocked while read-only; editing/deactivating/
+      // removing them is not (so access can always be revoked).
+      allow create:         if (isAdmin()) && subscriptionOk();
+      allow update, delete: if isAdmin();
+    }
+
+    // ── Regions ──────────────────────────────────────────────────
+    match /regions/{regionId} {
+      allow read:           if isLoggedIn();
+      allow create:         if (isAdmin() || isFieldAgent()) && subscriptionOk();
+      allow update, delete: if (isAdmin()) && subscriptionOk();
+    }
+
+    // ── Products ─────────────────────────────────────────────────
+    match /products/{productId} {
+      allow read:           if isLoggedIn();
+      allow create, delete: if (isAdmin()) && subscriptionOk();
+      allow update: if (isAdmin()
+        // Field agent: reserve stock when placing an order
+        || (isFieldAgent()
+            && request.resource.data.diff(resource.data)
+                .affectedKeys()
+                .hasOnly(['reservedStock']))
+        // Packing staff: reserve stock when placing an order OR do full restock
+        || (isPackingStaff()
+            && request.resource.data.diff(resource.data)
+                .affectedKeys()
+                .hasOnly(['reservedStock']))
+        || (isPackingStaff()
+            && request.resource.data.diff(resource.data)
+                .affectedKeys()
+                .hasOnly(['stock', 'reservedStock', 'updatedAt']))
+        // Packing staff: adjust reservedStock during partial-delivery handover
+        // (release stock for returned goods, then re-reserve it for a reorder)
+        || (isPackingStaff()
+            && request.resource.data.diff(resource.data)
+                .affectedKeys()
+                .hasOnly(['reservedStock', 'updatedAt']))
+        // FIX: Delivery agent: clear reservedStock on delivery for orders that
+        // were never packed (safety net so stock is never stuck as "blocked").
+        // Only allows reducing reservedStock (never increasing) and touching updatedAt.
+        || (isDelivery()
+            && request.resource.data.diff(resource.data)
+                .affectedKeys()
+                .hasOnly(['reservedStock', 'updatedAt'])
+            && request.resource.data.reservedStock <= resource.data.reservedStock))
+        && subscriptionOk();
+
+      match /stockMovements/{moveId} {
+        allow read:  if isAdmin() || isPackingStaff();
+        allow write: if (isAdmin() || isPackingStaff()) && subscriptionOk();
+      }
+
+      // costPrice is stored on the main product document
+    }
+
+    // ── Customers ────────────────────────────────────────────────
+    match /customers/{customerId} {
+      allow read:   if isAdmin() || isPackingStaff() || isFieldAgent() || isDelivery();
+      allow create: if (isAdmin() || isFieldAgent() || isPackingStaff()) && subscriptionOk();
+      allow delete: if (isAdmin()) && subscriptionOk();
+
+      allow update: if (isAdmin()
+        // Field agent: update balance/last order when placing an order
+        || (isFieldAgent()
+            && request.resource.data.diff(resource.data)
+                .affectedKeys()
+                .hasOnly(['outstandingDue', 'lastOrderAt', 'lastOrderId', 'updatedAt']))
+        // Packing staff: same — update balance/last order when placing an order
+        || (isPackingStaff()
+            && request.resource.data.diff(resource.data)
+                .affectedKeys()
+                .hasOnly(['outstandingDue', 'lastOrderAt', 'lastOrderId', 'updatedAt']))
+        || (isDelivery()
+            && request.resource.data.diff(resource.data)
+                .affectedKeys()
+                .hasOnly(['outstandingDue', 'updatedAt'])))
+        && subscriptionOk();
+
+      match /payments/{paymentId} {
+        allow read: if isAdmin() || isPackingStaff() || isFieldAgent() || isDelivery();
+
+        allow create: if (isAdmin()
+          || (isFieldAgent()
+              && (
+                (request.resource.data.direction == 'debit'
+                 && request.resource.data.type in ['order_placed'])
+                ||
+                (request.resource.data.direction == 'credit'
+                 && request.resource.data.type in
+                      ['delivery_payment', 'advance_collected', 'order_advance'])
+              ))
+          // Packing staff: same payment types as field agent when creating orders
+          || (isPackingStaff()
+              && (
+                (request.resource.data.direction == 'debit'
+                 && request.resource.data.type in ['order_placed'])
+                ||
+                (request.resource.data.direction == 'credit'
+                 && request.resource.data.type in
+                      ['delivery_payment', 'advance_collected', 'order_advance'])
+              ))
+          || (isDelivery()
+              && request.resource.data.direction == 'credit'
+              && request.resource.data.type == 'delivery_payment'))
+        && subscriptionOk();
+
+        allow update, delete: if (isAdmin()) && subscriptionOk();
+      }
+    }
+
+    // ── Orders ───────────────────────────────────────────────────
+    match /orders/{orderId} {
+      allow read: if isAdmin()
+        || isPackingStaff()
+        || (isFieldAgent() && resource.data.agentId          == request.auth.uid)
+        || (isDelivery()   && resource.data.deliveryPersonId == request.auth.uid);
+
+      // Packing staff can create orders
+      allow create: if (isAdmin() || isFieldAgent() || isPackingStaff()) && subscriptionOk();
+
+      allow update: if (isAdmin()
+        // Packing staff: pending → packed only
+        || (isPackingStaff()
+            && resource.data.status == 'pending'
+            && request.resource.data.status == 'packed'
+            && request.resource.data.diff(resource.data)
+                .affectedKeys()
+                .hasOnly(['status', 'packedAt', 'packedBy', 'packedByName']))
+        // Packing staff: save invoice number on any order
+        || (isPackingStaff()
+            && request.resource.data.diff(resource.data)
+                .affectedKeys()
+                .hasOnly(['invoiceNumber', 'invoiceType', 'billingMode', 'invoicedAt', 'appliedCharges']))
+        // Admin or packing staff: reassign
+        || (isAdminOrPacking()
+            && resource.data.status in ['assigned', 'returned_to_warehouse']
+            && request.resource.data.status == 'assigned'
+            && request.resource.data.diff(resource.data)
+                .affectedKeys()
+                .hasOnly(['status', 'deliveryPersonId', 'deliveryPersonName',
+                           'assignedAt', 'assignedBy', 'assignedByName', 'currentHolder']))
+        // Admin or packing staff: receive items back (attempted → returned_to_warehouse)
+        || (isAdminOrPacking()
+            && resource.data.status == 'attempted'
+            && request.resource.data.status == 'returned_to_warehouse'
+            && request.resource.data.diff(resource.data)
+                .affectedKeys()
+                .hasOnly(['status', 'currentHolder', 'returnedToWarehouseAt',
+                           'returnedToWarehouseBy', 'returnedToWarehouseByName', 'returnNotes']))
+        // Admin or packing staff: confirm handover of a partially-delivered
+        // order (closes it out — see components/HandoverModal.tsx)
+        || (isAdminOrPacking()
+            && resource.data.status == 'partially_delivered'
+            && request.resource.data.status == 'partially_delivered_closed'
+            && request.resource.data.diff(resource.data)
+                .affectedKeys()
+                .hasOnly(['status', 'handoverStatus', 'handoverAt',
+                           'handoverBy', 'handoverByName', 'updatedAt']))
+        // Admin or packing staff: cancel remaining items after handover
+        || (isAdminOrPacking()
+            && request.resource.data.diff(resource.data)
+                .affectedKeys()
+                .hasOnly(['remainingItemsCancelled', 'updatedAt']))
+        // Delivery agents: mark collected, delivered, attempted, or partially delivered
+        || (isDelivery()
+            && resource.data.deliveryPersonId == request.auth.uid
+            && request.resource.data.diff(resource.data)
+                .affectedKeys()
+                .hasOnly([
+                  'status', 'collectedAt', 'outForDeliveryAt',
+                  'amountCollected', 'paymentMode', 'deliveredAt',
+                  'deliveryLat', 'deliveryLng', 'signatureUrl',
+                  'signature', 'signatureCollected', 'billWithAgent',
+                  'deliveryAttempts', 'currentHolder',
+                  // Partial delivery fields
+                  'deliveredItems', 'partialBilledAmount',
+                  'handoverStatus', 'updatedAt'
+                ])))
+        && subscriptionOk();
+
+      allow delete: if (isAdmin()) && subscriptionOk();
+    }
+
+    // ── Settings ─────────────────────────────────────────────────
+    match /settings/invoiceCounter {
+      allow read:  if isLoggedIn();
+      allow write: if (isAdmin() || isPackingStaff()) && subscriptionOk();
+    }
+
+    match /settings/{docId} {
+      allow read:  if isLoggedIn();
+      allow write: if (isAdmin()) && subscriptionOk();
+    }
+
+    // ── Processing Recipes ───────────────────────────────────────
+    match /processingRecipes/{recipeId} {
+      allow read:   if isAdmin() || isPackingStaff();
+      allow create, update, delete: if (isAdmin()) && subscriptionOk();
+    }
+
+    // ── Processing Sessions ───────────────────────────────────────
+    match /processingSessions/{sessionId} {
+      allow read:   if isAdmin() || isPackingStaff();
+      allow update, create: if (isAdmin() || isPackingStaff()) && subscriptionOk();
+      allow delete: if (isAdmin()) && subscriptionOk();
+    }
+
+    // ── Agent Cash Ledger ─────────────────────────────────────────
+    match /agentCashLedger/{agentId} {
+      allow read:           if isAdmin() || request.auth.uid == agentId;
+      allow create, update: if (isAdmin() || request.auth.uid == agentId) && subscriptionOk();
+      allow delete:         if (isAdmin()) && subscriptionOk();
+
+      match /entries/{entryId} {
+        allow read:           if isAdmin() || request.auth.uid == agentId;
+        allow create:         if (isAdmin() || request.auth.uid == agentId) && subscriptionOk();
+        allow update, delete: if (isAdmin()) && subscriptionOk();
+      }
+    }
+    // ── Staff ─────────────────────────────────────────────────────
+    match /staff/{staffId} {
+      allow read:             if isAdmin() || isPackingStaff();
+      allow create, update:   if (isAdmin()) && subscriptionOk();
+      allow delete:           if (isAdmin()) && subscriptionOk();
+    }
+
+    // ── Attendance ────────────────────────────────────────────────
+    match /attendance/{recordId} {
+      allow read:   if isAdmin() || isPackingStaff();
+      allow write:  if (isAdmin() || isPackingStaff()) && subscriptionOk();
+    }
+
+    // ── Platform subscription (added) ─────────────────────────────
+    // None of these are affected by the read-only lock: paying is exactly
+    // what a locked tenant needs to be able to do.
+
+    match /platformAdmins/{uid} {
+      allow read:  if isLoggedIn() && request.auth.uid == uid;
+      allow write: if false; // console only
+    }
+
+    match /tenants/{tenantId} {
+      allow read:  if isPlatformAdmin() || (isLoggedIn() && myTenantId() == tenantId);
+      allow write: if isPlatformAdmin();
+    }
+
+    // public = UPI ID / WhatsApp / grace; defaultPricing = default prices.
+    // catalog / counters = platform admin only.
+    match /platform/{docId} {
+      allow read:  if (docId in ['public', 'defaultPricing'] && isLoggedIn()) || isPlatformAdmin();
+      allow write: if isPlatformAdmin();
+    }
+
+    match /platformTenants/{tenantId} {
+      allow read, write: if isPlatformAdmin();
+    }
+
+    match /tenantPricing/{tenantId} {
+      allow read:  if isPlatformAdmin() || (isLoggedIn() && myTenantId() == tenantId);
+      allow write: if isPlatformAdmin();
+    }
+
+    match /paymentRequests/{requestId} {
+      allow read: if isPlatformAdmin() || (isLoggedIn() && resource.data.tenantId == myTenantId());
+      // Only the tenant's admin pays, at exactly the published price.
+      allow create: if isAdmin()
+        && request.resource.data.tenantId == myTenantId()
+        && request.resource.data.keys().hasOnly(['id', 'tenantId', 'tenantName', 'planId', 'planName', 'months',
+             'amount', 'utr', 'screenshotUrl', 'status', 'submittedBy', 'submittedByName', 'submittedAt'])
+        && request.resource.data.id == requestId
+        && request.resource.data.status == 'pending'
+        && request.resource.data.submittedBy == request.auth.uid
+        && matchesPublishedPlan(request.resource.data);
+      // Platform admin approves/rejects; the tenant admin may only cancel
+      // their own still-pending request.
+      allow update: if isPlatformAdmin()
+        || (isAdmin()
+            && resource.data.tenantId == myTenantId()
+            && resource.data.status == 'pending'
+            && request.resource.data.status == 'cancelled'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt', 'cancelledBy']));
+      allow delete: if false;
+    }
+
+    // One doc per UTR ever submitted, so a UTR can't be reused.
+    match /paymentUtrs/{utr} {
+      allow get:    if isLoggedIn();
+      allow list:   if isPlatformAdmin();
+      allow create: if isAdmin()
+        && request.resource.data.tenantId == myTenantId()
+        && utr.matches('^[A-Z0-9]{6,30}$');
+      allow update, delete: if isPlatformAdmin();
+    }
+
+    match /subscriptionEvents/{eventId} {
+      allow read, create: if isPlatformAdmin();
+      allow update, delete: if false;
+    }
+  }
+}

@@ -311,3 +311,40 @@ None of this retroactively repairs Pandu Store's own numbers — `outstandingDue
 still sitting at ₹65,810 instead of the confirmed-correct ₹68,495. That's a one-time
 manual data correction (not a code change), separate from these fixes, and still
 outstanding — let me know when you want that done.
+
+---
+
+# Subscription (platform admin) — UPI payments, read-only lock
+
+Same feature as wholesale-manager-web, keyed by **tenant**. Today the whole app is one
+tenant (`main`); every existing user belongs to it. No payment gateway: the admin pays by
+UPI QR (amount fixed by the plan), taps **I've paid** (UTR / screenshot optional), and the
+platform admin verifies against the bank and approves. After the end date + grace period
+the app is **read-only for everyone — web and mobile** (reads still work).
+
+## One-time setup
+1. **Rules** — paste `firestore.rules` from this repo into Firebase Console → Firestore
+   Database → Rules → Publish. It is your existing rules unchanged, plus `&& subscriptionOk()`
+   on every write (except `app_config` and editing/removing users), plus the new collections.
+2. **Platform admin login** (separate from admin@ptm.com):
+   - Firebase Console → Authentication → Users → **Add user** (email + password).
+   - Copy its **User UID**.
+   - Firestore → Data → **Start collection** `platformAdmins` → Document ID = that UID →
+     any field (e.g. `note: "platform"`) → Save.
+   - Do **not** create a `users` doc for it. Log in on the normal login page → it opens `/platform`.
+3. In **Platform admin**:
+   - **Tenants → + Add tenant** with ID `main` (your business).
+   - **Settings** — UPI ID, payee name, WhatsApp number, grace days, reminder days, receipt header.
+   - **Plans & pricing** — plans (tick "Show to tenants" + Default price), categories, Save & publish.
+   - When ready: **Tenants → main → Set end date** (reason required). Until then nothing is locked.
+
+## Behaviour
+- Only the `admin` role sees **Subscription** (sidebar) and can pay; packing staff see the banner
+  with "contact the admin".
+- While read-only: Create Order, Packing View, Processing and Attendance show a notice; other
+  screens stay viewable, and any save is refused by the rules. Users can still be edited /
+  deactivated (not added).
+- New collections: `platformAdmins`, `tenants`, `platform/{public,defaultPricing,catalog,counters}`,
+  `platformTenants`, `tenantPricing`, `paymentRequests`, `paymentUtrs`, `subscriptionEvents`.
+- Future multi-tenant: give each user a `tenantId` field; rules and UI already read
+  `tenantId` (default `main`).

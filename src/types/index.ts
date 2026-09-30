@@ -15,6 +15,10 @@ export interface AppUser {
   // session only (e.g. the order drawer's "Mark as Paid" dev tool). Meant to
   // be switched on briefly while doing data-fix work, then switched back off.
   devAccess?: boolean;
+  // Which tenant (business) this user belongs to. Absent today — every
+  // user belongs to the single tenant DEFAULT_TENANT_ID ("main"). Only
+  // read by the subscription feature; firestore.rules uses the same default.
+  tenantId?: string;
 }
 
 // Audit trail entry written whenever a dev-mode tool directly mutates a

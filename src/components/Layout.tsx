@@ -9,6 +9,9 @@ import { Customer } from "../types";
 import { getOverdueCustomers } from "../utils/ledger";
 import { useBillingDraftsStore } from "../store/billingDraftsStore";
 import BillingBubbles from "./BillingBubbles";
+import { SubscriptionBanner } from "./subscription/SubscriptionBanner";
+import { useSubscriptionInfo, useSubscriptionStore, useSubscriptionSync } from "../store/subscriptionStore";
+import Subscription from "../pages/Subscription";
 
 type NavItem = {
   path?: string;
@@ -119,6 +122,11 @@ export default function Layout() {
 
   const isPackingStaff = user?.role === "packing_staff";
   const isAdmin = user?.role === "admin";
+
+  // ── Subscription (see store/subscriptionStore.ts) ─────────────
+  useSubscriptionSync();
+  const subscription = useSubscriptionInfo();
+  const showSubscriptionLink = useSubscriptionStore((s) => s.tenant?.subscriptionRequired === true) && isAdmin;
   const navItems = isPackingStaff ? packingNavItems : adminNavItems;
 
   const [reportsOpen, setReportsOpen] = useState<boolean>(false);
@@ -214,6 +222,15 @@ export default function Layout() {
 
       {/* Bottom */}
       <div className="p-3 border-t border-gray-700 space-y-1">
+        {showSubscriptionLink && (
+          <NavLink to="/subscription" onClick={(e) => handleNavClick(e, "/subscription")}
+            className={({ isActive }) =>
+              `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                isActive ? "bg-orange-500 text-white" : "text-gray-300 hover:bg-gray-800"
+              }`}>
+            <span>💳</span> Subscription
+          </NavLink>
+        )}
         {!isPackingStaff && (
           <NavLink to="/settings" onClick={(e) => handleNavClick(e, "/settings")}
             className={({ isActive }) =>
@@ -262,8 +279,21 @@ export default function Layout() {
           <span className="text-sm font-bold text-orange-500">PTM Mill</span>
         </div>
 
+        <SubscriptionBanner />
         <div className="flex-1 overflow-auto">
-          <Outlet />
+          {/* Waiting for first activation: admin gets the payment page,
+              everyone else a notice — nothing else is usable yet. */}
+          {subscription.status === "pending" ? (
+            isAdmin ? (
+              <Subscription />
+            ) : (
+              <div className="p-8 text-center text-sm text-gray-600">
+                The subscription hasn't been activated yet. Please contact the admin.
+              </div>
+            )
+          ) : (
+            <Outlet />
+          )}
         </div>
       </div>
 

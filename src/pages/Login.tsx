@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { auth, db } from "../firebase/config";
 import { useAuthStore } from "../store/authStore";
 import { AppUser } from "../types";
+import { isPlatformAdminUid } from "../lib/subscriptionApi";
 
 // ── Brute-force constants ─────────────────────────────────────────
 // SECURITY NOTE: This is a client-side UX guard only.
@@ -46,7 +47,7 @@ export default function Login() {
   // Derive initial lock state from sessionStorage so refresh doesn't bypass it
   const lockState = useRef(getLockState());
 
-  const { logout } = useAuthStore();
+  const { logout, setPlatformAdmin } = useAuthStore();
   const navigate   = useNavigate();
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -75,6 +76,13 @@ export default function Login() {
       // ── Validate user doc exists ──────────────────────────────
       const userDoc = await getDoc(doc(db, "users", result.user.uid));
       if (!userDoc.exists()) {
+        // Separate platform-admin login (subscription configuration) —
+        // it has no business account, only a /platformAdmins doc.
+        if (await isPlatformAdminUid(result.user.uid)) {
+          setPlatformAdmin({ uid: result.user.uid, email: result.user.email ?? "" });
+          navigate("/platform");
+          return;
+        }
         await signOut(auth);
         setError("Invalid email or password.");
         return;
