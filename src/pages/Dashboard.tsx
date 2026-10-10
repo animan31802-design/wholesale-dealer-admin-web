@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { collection, onSnapshot, query, orderBy, getDocs } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { Order, Product, Customer } from "../types";
-import { getOverdueCustomers, OverdueCustomer } from "../utils/ledger";
+import { getOverdueCustomers, getOverdueThresholdDays, DEFAULT_OVERDUE_THRESHOLD_DAYS } from "../utils/ledger";
+import type { OverdueCustomer } from "../utils/ledger";
 import { useAuthStore } from "../store/authStore";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
@@ -31,6 +32,7 @@ export default function Dashboard() {
   const [overdueList, setOverdueList]     = useState<OverdueCustomer[]>([]);
   const [overdueModal, setOverdueModal]   = useState(false);
   const [overdueLoading, setOverdueLoading] = useState(false);
+  const [overdueDays, setOverdueDays]     = useState<number>(DEFAULT_OVERDUE_THRESHOLD_DAYS);
 
   useEffect(() => {
     const unsub1 = onSnapshot(query(collection(db, "orders"), orderBy("createdAt", "desc")), (snap) => {
@@ -47,7 +49,9 @@ export default function Dashboard() {
       getDocs(query(collection(db, "customers"), orderBy("shopName")))
         .then(async (snap) => {
           const customers = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Customer));
-          const overdue = await getOverdueCustomers(customers, 30);
+          const days = await getOverdueThresholdDays();
+          setOverdueDays(days);
+          const overdue = await getOverdueCustomers(customers, days);
           setOverdueList(overdue);
         })
         .catch(() => {})
@@ -164,7 +168,7 @@ export default function Dashboard() {
               {overdueLoading ? <span className="animate-spin text-base">⏳</span> : "🔔"}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-xs text-orange-500 font-semibold uppercase tracking-wide">Overdue Balances · 30+ Days</p>
+              <p className="text-xs text-orange-500 font-semibold uppercase tracking-wide">Overdue Balances · {overdueDays}+ Days</p>
               {overdueLoading ? (
                 <p className="text-sm text-orange-400 mt-0.5">Checking customer dues...</p>
               ) : (
@@ -321,6 +325,8 @@ export default function Dashboard() {
       {overdueModal && (
         <OverdueDueModal
           overdueList={overdueList}
+          thresholdDays={overdueDays}
+          orders={orders}
           onClose={() => setOverdueModal(false)}
           onGoToCustomers={() => { setOverdueModal(false); navigate("/customers"); }}
         />
@@ -369,12 +375,23 @@ function StockAlertModal({ type, products, onClose, onGoToProducts }: {
   );
 }
 // ── Overdue Due Modal ─────────────────────────────────────────────
-function OverdueDueModal({ overdueList, onClose, onGoToCustomers }: {
+function OverdueDueModal({ overdueList, thresholdDays, orders, onClose, onGoToCustomers }: {
   overdueList: OverdueCustomer[];
+  thresholdDays: number;
+  orders: Order[];
   onClose: () => void;
   onGoToCustomers: () => void;
 }) {
   const totalDue = overdueList.reduce((s, o) => s + o.dueAmount, 0);
+
+  // Older ledger entries don't carry orderNo — look it up from live orders.
+  const orderNoById = new Map(orders.map((o) => [o.id!, o.orderNo]));
+  const billLabel = (o: OverdueCustomer): string => {
+    if (o.oldestUnpaidType !== "order_placed") return "Adjustment";
+    const id = o.oldestUnpaidOrderId;
+    const no = o.oldestUnpaidOrderNo || (id ? orderNoById.get(id) : undefined);
+    return "Bill #" + (no || (id ? id.slice(0, 8).toUpperCase() : "—"));
+  };
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -383,7 +400,7 @@ function OverdueDueModal({ overdueList, onClose, onGoToCustomers }: {
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 rounded-t-2xl bg-orange-50 border-b border-orange-100 flex-shrink-0">
           <div>
-            <h3 className="text-lg font-bold text-orange-700">🔔 Overdue Balances · 30+ Days</h3>
+            <h3 className="text-lg font-bold text-orange-700">🔔 Overdue Balances · {thresholdDays}+ Days</h3>
             <p className="text-sm text-orange-500 mt-0.5">
               {overdueList.length} customer{overdueList.length !== 1 ? "s" : ""} · Total ₹{totalDue.toLocaleString("en-IN", { maximumFractionDigits: 2 })} pending
             </p>
@@ -399,14 +416,14 @@ function OverdueDueModal({ overdueList, onClose, onGoToCustomers }: {
                 <th className="px-5 py-3 text-left">Shop</th>
                 <th className="px-5 py-3 text-left">Phone</th>
                 <th className="px-5 py-3 text-right">Due Amount</th>
-                <th className="px-5 py-3 text-right">Days Overdue</th>
+                <th className="px-5 py-3 text-right">Overdue · Oldest Bill</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {overdueList.map((o) => {
                 const urgency =
-                  o.daysOverdue >= 90 ? "text-red-600 bg-red-50" :
-                  o.daysOverdue >= 60 ? "text-orange-600 bg-orange-50" :
+                  o.daysOverdue >= thresholdDays * 3 ? "text-red-600 bg-red-50" :
+                  o.daysOverdue >= thresholdDays * 2 ? "text-orange-600 bg-orange-50" :
                   "text-yellow-600 bg-yellow-50";
                 return (
                   <tr key={o.customer.id} className="hover:bg-gray-50">
@@ -422,6 +439,11 @@ function OverdueDueModal({ overdueList, onClose, onGoToCustomers }: {
                       <span className={`text-xs font-semibold px-2 py-1 rounded-full ${urgency}`}>
                         {o.daysOverdue}d overdue
                       </span>
+                      <p className="text-[11px] text-gray-500 mt-1 whitespace-nowrap font-mono">{billLabel(o)}</p>
+                      <p className="text-[10px] text-gray-400 whitespace-nowrap">
+                        {new Date(o.oldestUnpaidDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                        {" · "}₹{o.oldestUnpaidRemaining.toLocaleString("en-IN", { maximumFractionDigits: 2 })} unpaid
+                      </p>
                     </td>
                   </tr>
                 );

@@ -23,6 +23,7 @@ export interface LedgerEntry {
                             // and (for backward compatibility with pre-existing entries) older
                             // manual_payment entries written before grouping was introduced
   orderAmount?: number;    // total of that order
+  orderNo?: string;        // human-facing order number — written on newer entries only
   // Breakdown of which order(s) a single payment was split across, oldest-
   // settled-first. Only present on manual_payment entries written by
   // applyPaymentToOrders going forward — older entries (one full ledger row

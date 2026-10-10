@@ -42,6 +42,10 @@ export interface BusinessSettings {
   // (unchanged prior behaviour) so existing prints don't change until an
   // admin explicitly turns it off.
   includeGraphsInPrint?: boolean;
+  // A customer appears in the Dashboard "Overdue Balances" alert (and the
+  // sidebar badge) once their oldest unpaid bill is at least this many days
+  // old, counted from the order placed date. Defaults to 30.
+  overdueThresholdDays?: number;
 }
 
 const EMPTY: BusinessSettings = {
@@ -55,6 +59,7 @@ const EMPTY: BusinessSettings = {
   chargeDiscountTypes: [],
   draftBillExpiryHours: 3,
   includeGraphsInPrint: true,
+  overdueThresholdDays: 30,
 };
 
 export async function getBusinessSettings(): Promise<BusinessSettings> {
@@ -97,6 +102,7 @@ export default function Settings() {
         ...data,
         chargeDiscountTypes: data.chargeDiscountTypes ?? [],
         draftBillExpiryHours: data.draftBillExpiryHours ?? 3,
+        overdueThresholdDays: data.overdueThresholdDays ?? 30,
       });
       if (calSnap.exists()) setCalendar(calSnap.data() as WorkCalendar);
       setLoading(false);
@@ -392,6 +398,31 @@ export default function Settings() {
                 className={inp}
               />
               <p className="text-xs text-gray-400 mt-1">Default is 3 hours. Applies to all agents.</p>
+            </Field>
+          </div>
+        </Section>
+
+        {/* ── Overdue Alerts ───────────────────────────────────────────── */}
+        <Section title="Overdue Alerts">
+          <p className="text-xs text-gray-400 mb-4">
+            A customer is flagged in the Dashboard "Overdue Balances" alert and the sidebar badge
+            when their oldest unpaid bill is at least this many days old (counted from the order
+            placed date). Payments are matched to bills oldest-first.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Field label="Overdue alert after (days)">
+              <input
+                type="number"
+                min={1}
+                max={365}
+                value={form.overdueThresholdDays ?? 30}
+                onChange={e => {
+                  const n = parseInt(e.target.value, 10);
+                  setForm(f => ({ ...f, overdueThresholdDays: isNaN(n) ? 30 : Math.max(1, Math.min(365, n)) }));
+                }}
+                className={inp}
+              />
+              <p className="text-xs text-gray-400 mt-1">Default is 30 days.</p>
             </Field>
           </div>
         </Section>

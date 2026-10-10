@@ -11,47 +11,114 @@ export interface OverdueCustomer {
   customer: Customer;
   dueAmount: number;
   daysOverdue: number;
-  oldestUnpaidDate: string; // ISO string of when the unpaid balance started
+  oldestUnpaidDate: string; // ISO createdAt of the oldest bill not yet covered by payments
+  // The ledger debit that is overdue — normally an order_placed entry, but
+  // it can be a debit adjustment. orderId/orderNo are set when it's an order.
+  oldestUnpaidType: LedgerEntry["type"];
+  oldestUnpaidOrderId?: string;
+  oldestUnpaidOrderNo?: string;
+  oldestUnpaidRemaining: number; // ₹ still unpaid on that oldest bill
 }
 
-// ── Find the date the balance first went above 0 and never came back ─
-// Walk entries oldest→newest, track running balance.
-// The "overdue start date" is the createdAt of the first debit entry
-// after which the balance never returned to 0.
-export function getOverdueStartDate(entries: LedgerEntry[]): string | null {
+export const DEFAULT_OVERDUE_THRESHOLD_DAYS = 30;
+
+// Reads Settings → Overdue Alerts (settings/business.overdueThresholdDays).
+// Falls back to 30 if the doc/field is missing or unreadable.
+export async function getOverdueThresholdDays(): Promise<number> {
+  try {
+    const snap = await getDoc(doc(db, "settings", "business"));
+    const n = snap.exists() ? Number(snap.data().overdueThresholdDays) : NaN;
+    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : DEFAULT_OVERDUE_THRESHOLD_DAYS;
+  } catch {
+    return DEFAULT_OVERDUE_THRESHOLD_DAYS;
+  }
+}
+
+// ── Oldest unpaid bill (FIFO) ─────────────────────────────────────
+// All credits (payments, credit adjustments) are pooled and applied to the
+// debits oldest-first; the first debit the pool can't fully cover is the
+// oldest unpaid bill.
+//
+// Why not a running-balance walk (the previous approach): it dated the
+// overdue from "the last time the balance was ₹0". A regular customer who
+// always owes something never touches ₹0, so every one of them looked
+// overdue from their very first order (e.g. 126 days for a customer whose
+// only unpaid bill was 5 days old). It also clamped the balance at 0, so the
+// result depended on the order of same-timestamp entries. Pooling credits
+// makes the result independent of entry order within the ledger.
+//
+// Cancelled orders are netted out first: an order_cancelled credit is
+// matched against that order's own order_placed debit, so a cancellation
+// never "pays" an unrelated older bill.
+export function getOldestUnpaidDebit(
+  entries: LedgerEntry[]
+): { entry: LedgerEntry; remaining: number } | null {
   if (entries.length === 0) return null;
 
-  // entries are already sorted asc by createdAt (getLedger uses orderBy asc)
-  let balance = 0;
-  let candidateDate: string | null = null;
-
-  for (const entry of entries) {
-    if (entry.direction === "debit") {
-      balance += entry.amount;
-      // Mark this debit as a candidate if balance just went above 0
-      if (balance > 0 && candidateDate === null) {
-        candidateDate = entry.createdAt;
-      }
-    } else {
-      balance = Math.max(0, balance - entry.amount);
-      // If balance is fully cleared, reset the candidate
-      if (balance <= 0) {
-        candidateDate = null;
-      }
+  // 1. Net cancellations against their own order's debit
+  const cancelledByOrder = new Map<string, number>();
+  for (const e of entries) {
+    if (e.type === "order_cancelled" && e.direction === "credit" && e.orderId) {
+      cancelledByOrder.set(e.orderId, round2((cancelledByOrder.get(e.orderId) ?? 0) + e.amount));
     }
   }
 
-  // If balance is still above 0 at end, candidateDate is the overdue start
-  return balance > 0 ? candidateDate : null;
+  let creditPool = 0;
+  const debits: { entry: LedgerEntry; amount: number; idx: number }[] = [];
+
+  entries.forEach((e, idx) => {
+    if (e.direction === "credit") {
+      // Cancellation credits that match an order's debit are consumed in step 1
+      if (e.type === "order_cancelled" && e.orderId) return;
+      creditPool += e.amount;
+      return;
+    }
+    let amount = e.amount;
+    if (e.type === "order_placed" && e.orderId && cancelledByOrder.has(e.orderId)) {
+      const avail = cancelledByOrder.get(e.orderId)!;
+      const used = Math.min(avail, amount);
+      amount = round2(amount - used);
+      cancelledByOrder.set(e.orderId, round2(avail - used));
+    }
+    if (amount > 0.01) debits.push({ entry: e, amount, idx });
+  });
+
+  // A cancellation credit with no matching debit in this ledger still
+  // reduces what's owed — put any leftover into the general pool.
+  for (const left of cancelledByOrder.values()) creditPool += left;
+  creditPool = round2(creditPool);
+
+  // 2. Oldest-first (stable on ties)
+  debits.sort((a, b) =>
+    (a.entry.createdAt || "").localeCompare(b.entry.createdAt || "") || a.idx - b.idx
+  );
+
+  // 3. Apply the pool FIFO
+  for (const d of debits) {
+    if (creditPool >= d.amount - 0.01) {
+      creditPool = round2(creditPool - d.amount);
+      continue;
+    }
+    return { entry: d.entry, remaining: round2(d.amount - creditPool) };
+  }
+  return null; // everything is covered
 }
 
-// ── Fetch all overdue customers (due > 0 AND oldest unpaid > 30 days) ─
+// Kept for any caller that only needs the date.
+export function getOverdueStartDate(entries: LedgerEntry[]): string | null {
+  return getOldestUnpaidDebit(entries)?.entry.createdAt ?? null;
+}
+
+// ── Fetch all overdue customers (due > 0 AND oldest unpaid bill ≥ threshold days) ─
+// thresholdDays omitted → read from Settings (default 30).
 export async function getOverdueCustomers(
   customers: Customer[],
-  thresholdDays = 30
+  thresholdDays?: number
 ): Promise<OverdueCustomer[]> {
+  const days = thresholdDays ?? await getOverdueThresholdDays();
   const now = Date.now();
-  const thresholdMs = thresholdDays * 24 * 60 * 60 * 1000;
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const thresholdMs = days * DAY_MS;
 
   // Only check customers that actually have a due
   const withDue = customers.filter((c) => (c.outstandingDue || 0) > 0);
@@ -62,20 +129,24 @@ export async function getOverdueCustomers(
     withDue.map(async (customer) => {
       try {
         const entries = await getLedger(customer.id!);
-        const overdueStart = getOverdueStartDate(entries);
-        if (!overdueStart) return;
-
-        const ageMs = now - new Date(overdueStart).getTime();
-        if (ageMs < thresholdMs) return;
-
-        const daysOverdue = Math.floor(ageMs / (24 * 60 * 60 * 1000));
         const dueAmount = calcBalance(entries);
+        if (dueAmount <= 0.01) return;
+
+        const oldest = getOldestUnpaidDebit(entries);
+        if (!oldest) return;
+
+        const ageMs = now - new Date(oldest.entry.createdAt).getTime();
+        if (!Number.isFinite(ageMs) || ageMs < thresholdMs) return;
 
         results.push({
           customer,
           dueAmount,
-          daysOverdue,
-          oldestUnpaidDate: overdueStart,
+          daysOverdue: Math.floor(ageMs / DAY_MS),
+          oldestUnpaidDate: oldest.entry.createdAt,
+          oldestUnpaidType: oldest.entry.type,
+          oldestUnpaidOrderId: oldest.entry.orderId,
+          oldestUnpaidOrderNo: oldest.entry.orderNo || undefined,
+          oldestUnpaidRemaining: oldest.remaining,
         });
       } catch {
         // Skip customers where ledger fetch fails

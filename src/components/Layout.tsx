@@ -139,7 +139,7 @@ export default function Layout() {
     getDocs(query(collection(db, "customers"), orderBy("shopName")))
       .then(async (snap) => {
         const customers = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Customer));
-        const overdue = await getOverdueCustomers(customers, 30);
+        const overdue = await getOverdueCustomers(customers); // threshold from Settings
         setOverdueCount(overdue.length);
       })
       .catch(() => {});

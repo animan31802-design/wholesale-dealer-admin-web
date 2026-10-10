@@ -15,6 +15,7 @@ import { useAuthStore } from "../store/authStore";
 import { useModalKeyboard } from "../hooks/useModalKeyboard";
 import { useTamilSearch } from "../utils/UseTamilSearch";
 import { TamilSearchInput } from "../components/TamilSearchInput";
+import InvoiceModal from "../components/InvoiceModal";
 
 const emptyCustomer = (): Customer => ({
   shopName: "", ownerName: "", phone: "", alternatePhone: "",
@@ -544,6 +545,7 @@ function LedgerModal({ customer, isAdmin, onClose }: {
   const [loading, setLoading]     = useState(true);
   const [tab, setTab]             = useState<"ledger" | "orders" | "payment" | "adjust">("ledger");
   const [custOrders, setCustOrders] = useState<Order[]>([]);
+  const [invoiceOrder, setInvoiceOrder] = useState<Order | null>(null);
   // Which ledger rows are showing their per-order breakdown (see .allocations
   // on LedgerEntry) — keyed by entry id. Only entries with 2+ allocations get
   // an expand toggle at all; a single-order payment has nothing to expand.
@@ -657,7 +659,8 @@ function LedgerModal({ customer, isAdmin, onClose }: {
   };
 
   useEffect(() => { fetchLedger(); }, [customer.id]);
-  useEffect(() => { if (tab === "orders" || tab === "payment") fetchOrders(); }, [tab]);
+  // "adjust" also needs orders — the Adjust tab warns about unpaid orders.
+  useEffect(() => { if (tab === "orders" || tab === "payment" || tab === "adjust") fetchOrders(); }, [tab]);
 
   const balance = calcBalance(entries);
 
@@ -807,6 +810,15 @@ function LedgerModal({ customer, isAdmin, onClose }: {
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+      {invoiceOrder && (
+        <InvoiceModal
+          order={invoiceOrder}
+          isAdmin={isAdmin}
+          closeOnEscape
+          onClose={() => setInvoiceOrder(null)}
+          onChanged={fetchOrders}
+        />
+      )}
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
 
         {/* Header */}
@@ -980,11 +992,13 @@ function LedgerModal({ customer, isAdmin, onClose }: {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide sticky top-0">
                   <tr>
+                    <th className="px-5 py-3 text-left">Order</th>
                     <th className="px-5 py-3 text-left">Date</th>
                     <th className="px-5 py-3 text-left">Agent</th>
                     <th className="px-5 py-3 text-right">Amount</th>
                     <th className="px-5 py-3 text-left">Status</th>
                     <th className="px-5 py-3 text-right">Collected</th>
+                    <th className="px-3 py-3 text-center">Invoice</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -1001,6 +1015,14 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                     const balance = o.amountCollected !== undefined ? o.totalAmount - o.amountCollected : null;
                     return (
                       <tr key={o.id} className="hover:bg-gray-50">
+                        <td className="px-5 py-3 whitespace-nowrap">
+                          <p className="font-mono text-xs font-semibold text-gray-800">
+                            #{o.orderNo ?? o.id!.slice(0, 8).toUpperCase()}
+                          </p>
+                          {o.invoiceNumber && (
+                            <p className="text-[10px] text-gray-400 mt-0.5">Inv {o.invoiceNumber}</p>
+                          )}
+                        </td>
                         <td className="px-5 py-3 text-gray-500 whitespace-nowrap text-xs">
                           {new Date(o.createdAt).toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" })}
                         </td>
@@ -1021,19 +1043,33 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                             </div>
                           ) : <span className="text-gray-300">—</span>}
                         </td>
+                        <td className="px-3 py-3 text-center">
+                          {o.status !== "cancelled" && (
+                            <button
+                              onClick={() => setInvoiceOrder(o)}
+                              title={o.invoiceNumber ? "View Invoice" : "Generate Invoice"}
+                              className={`text-base px-2 py-1 rounded-lg transition-colors ${
+                                o.invoiceNumber
+                                  ? "bg-green-50 hover:bg-green-100"
+                                  : "bg-orange-50 hover:bg-orange-100"
+                              }`}>
+                              {o.invoiceNumber ? "👁" : "🧾"}
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
                 </tbody>
                 <tfoot className="bg-gray-50 border-t border-gray-200">
                   <tr>
-                    <td colSpan={2} className="px-5 py-3 text-xs font-semibold text-gray-500">
+                    <td colSpan={3} className="px-5 py-3 text-xs font-semibold text-gray-500">
                       {custOrders.length} orders total
                     </td>
                     <td className="px-5 py-3 text-right font-bold text-gray-800">
                       ₹{custOrders.reduce((s,o) => s + o.totalAmount, 0).toFixed(2)}
                     </td>
-                    <td colSpan={2} />
+                    <td colSpan={3} />
                   </tr>
                 </tfoot>
               </table>
@@ -1223,6 +1259,49 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                     placeholder="e.g. 200 (charge) or -200 (credit)"
                     className={inp} />
                 </div>
+
+                {/* Guard: a credit adjustment only changes the ledger — never an
+                    order. Using it to remove a wrong bill leaves that order
+                    showing as unpaid, so the Orders tab and the ledger stop
+                    agreeing. Warning only; the admin can still save. */}
+                {(() => {
+                  const amt = parseFloat(amount);
+                  if (isNaN(amt) || amt >= 0 || !hasUnpaidOrders) return null;
+                  const credit = round2(Math.abs(amt));
+                  const exactMatch = unpaidOrdersOldestFirst.find(
+                    (o) => Math.abs(round2(o.totalAmount - (o.amountCollected ?? 0)) - credit) < 0.01
+                  );
+                  const label = (o: Order) => o.orderNo ?? o.id!.slice(0, 8).toUpperCase();
+                  return (
+                    <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 text-sm text-amber-800 space-y-2">
+                      <p className="font-semibold">⚠ Adjustments don't change any order</p>
+                      <p className="text-xs">
+                        This credit only reduces the ledger balance. The order(s) below will still show as unpaid.
+                        To remove a wrong bill, <span className="font-semibold">cancel the order</span> from the Orders screen instead.
+                        To record money received, use the <span className="font-semibold">Payment</span> tab.
+                      </p>
+                      {exactMatch && (
+                        <p className="text-xs font-semibold">
+                          ₹{credit.toFixed(2)} matches the unpaid amount on order #{label(exactMatch)}
+                          {" "}({new Date(exactMatch.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}).
+                        </p>
+                      )}
+                      <div className="border border-amber-200 bg-white/60 rounded-lg divide-y divide-amber-100 max-h-32 overflow-y-auto">
+                        {unpaidOrdersOldestFirst.map((o) => (
+                          <div key={o.id} className={`flex justify-between px-3 py-1.5 text-xs ${exactMatch?.id === o.id ? "bg-amber-100 font-semibold" : ""}`}>
+                            <span className="font-mono">
+                              #{label(o)}
+                              <span className="text-amber-600 font-sans ml-1">
+                                {new Date(o.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
+                              </span>
+                            </span>
+                            <span>₹{Math.max(0, round2(o.totalAmount - (o.amountCollected ?? 0))).toFixed(2)} due</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
