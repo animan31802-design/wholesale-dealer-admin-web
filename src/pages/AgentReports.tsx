@@ -551,7 +551,9 @@ function DeliveryAgentReport({ orders, agents }: { orders: Order[]; agents: AppU
       if (o.vehicleNumber) s.vehicles.add(o.vehicleNumber);
       if (o.status === "delivered") {
         s.delivered++;
-        if (o.assignedAt && o.deliveredAt) {
+        // Admin-marked deliveries carry a date typed by the admin, not a
+        // real delivery-app timestamp — keep them out of timing stats.
+        if (o.assignedAt && o.deliveredAt && !o.deliveredByAdmin) {
           const mins = (new Date(o.deliveredAt).getTime() - new Date(o.assignedAt).getTime()) / 60000;
           if (mins > 0 && mins < 1440) s.avgDeliveryMin.push(mins);
         }

@@ -398,7 +398,9 @@ export default function AgentCashCollection() {
       // Delivery agent gets the amount they physically collected at the door
       // (advance is separate cash already with the field agent; admin-recorded
       // settlements are excluded since the delivery agent never held that cash)
-      if (o.status === "delivered" && o.deliveryPersonId && deliveryCollected > 0) {
+      // Orders an admin marked delivered from the web never passed through the
+      // delivery agent's hands for payment — don't credit them any cash.
+      if (o.status === "delivered" && !(o as any).deliveredByAdmin && o.deliveryPersonId && deliveryCollected > 0) {
         map[o.deliveryPersonId] = (map[o.deliveryPersonId] ?? 0) + deliveryCollected;
       }
     });
@@ -422,7 +424,7 @@ export default function AgentCashCollection() {
           const collected = o.amountCollected ?? 0;
           const adminPortion = (o as any).adminCollected ?? 0;
           const deliveryCollected = Math.max(0, collected - adminPortion);
-          return o.status === "delivered" && o.deliveryPersonId === agent.uid && deliveryCollected > advance;
+          return o.status === "delivered" && !(o as any).deliveredByAdmin && o.deliveryPersonId === agent.uid && deliveryCollected > advance;
         }
         return false;
       }).length;

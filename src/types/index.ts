@@ -240,6 +240,13 @@ export interface Order {
   packedBy?: string;
   packedByName?: string;
   deliveredAt?: string;
+  // Set when an admin marked the order delivered from the web (not the delivery app)
+  deliveredByAdmin?: boolean;
+  deliveredBy?: string;
+  deliveredByName?: string;
+  adminDeliveredAt?: string;   // when the admin clicked (deliveredAt may be back-dated)
+  adminDeliveryNote?: string;
+  deliveryUndoLog?: Array<{ undoneAt: string; undoneBy: string; undoneByName: string; previousDeliveredAt: string | null }>;
   cancelledAt?: string;
   cancelledBy?: string;
   cancelledByName?: string;

@@ -16,6 +16,7 @@ import { useTamilSearch } from "../utils/UseTamilSearch";
 import { TamilSearchInput } from "../components/TamilSearchInput";
 import HandoverModal from "../components/HandoverModal";
 import InvoiceModal from "../components/InvoiceModal";
+import { adminMarkDelivered, adminUndoDelivered, canAdminMarkDelivered, canAdminUndoDelivered, BULK_DELIVERABLE_STATUSES } from "../utils/delivery";
 
 const STATUS_COLORS: Record<string, string> = {
   pending:                "bg-yellow-100 text-yellow-700",
@@ -52,6 +53,8 @@ export default function Orders() {
   const [cancelOrder, setCancelOrder]   = useState<Order | null>(null);
   const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set());
   const [showBulkAssign, setShowBulkAssign] = useState(false);
+  const [deliverOrder, setDeliverOrder]     = useState<Order | null>(null);
+  const [showBulkDeliver, setShowBulkDeliver] = useState(false);
   const [returnOrder, setReturnOrder]     = useState<Order | null>(null);
   const [receiveBackOrder, setReceiveBackOrder] = useState<Order | null>(null);
   const [reassignOrder, setReassignOrder] = useState<Order | null>(null);
@@ -276,8 +279,11 @@ export default function Orders() {
 
   const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
-  // Only packed orders can be bulk assigned
-  const packedInView = paginated.filter((o) => o.status === "packed");
+  // Packed orders can be bulk assigned; admins can also select Assigned
+  // orders (bulk Mark Delivered). Variable name kept for minimal churn.
+  const isSelectable = (o: Order) =>
+    o.status === "packed" || (user?.role === "admin" && o.status === "assigned");
+  const packedInView = paginated.filter(isSelectable);
   const allPackedSelected = packedInView.length > 0 && packedInView.every((o) => selectedIds.has(o.id!));
 
   const handleExcelExport = () => {
@@ -473,7 +479,7 @@ export default function Orders() {
               {selectedIds.size}
             </span>
             <span className="text-sm font-medium text-indigo-700">
-              {selectedIds.size} packed order{selectedIds.size !== 1 ? "s" : ""} selected
+              {selectedIds.size} order{selectedIds.size !== 1 ? "s" : ""} selected
             </span>
           </div>
           <div className="flex gap-2">
@@ -483,12 +489,31 @@ export default function Orders() {
             >
               Clear
             </button>
-            <button
-              onClick={() => setShowBulkAssign(true)}
-              className="bg-indigo-500 text-white text-sm font-semibold px-4 py-1.5 rounded-lg hover:bg-indigo-600"
-            >
-              🚚 Assign All to Delivery Agent
-            </button>
+            {(() => {
+              const sel = [...selectedIds].map((id) => orders.find((o) => o.id === id)).filter(Boolean) as Order[];
+              const packedCount = sel.filter((o) => o.status === "packed").length;
+              const deliverable = sel.filter((o) => (BULK_DELIVERABLE_STATUSES as readonly string[]).includes(o.status));
+              return (
+                <>
+                  {packedCount > 0 && (
+                    <button
+                      onClick={() => setShowBulkAssign(true)}
+                      className="bg-indigo-500 text-white text-sm font-semibold px-4 py-1.5 rounded-lg hover:bg-indigo-600"
+                    >
+                      🚚 Assign {packedCount} to Delivery Agent
+                    </button>
+                  )}
+                  {user?.role === "admin" && deliverable.length > 0 && (
+                    <button
+                      onClick={() => setShowBulkDeliver(true)}
+                      className="bg-green-600 text-white text-sm font-semibold px-4 py-1.5 rounded-lg hover:bg-green-700"
+                    >
+                      ✅ Mark {deliverable.length} Delivered
+                    </button>
+                  )}
+                </>
+              );
+            })()}
           </div>
         </div>
       )}
@@ -560,7 +585,7 @@ export default function Orders() {
                     onChange={toggleSelectAll}
                     onClick={(e) => e.stopPropagation()}
                     className="w-4 h-4 rounded accent-orange-500 cursor-pointer"
-                    title="Select all packed orders"
+                    title="Select all packed / assigned orders"
                   />
                 )}
               </th>
@@ -579,7 +604,7 @@ export default function Orders() {
             {paginated.map((order) => (
               <tr key={order.id} className={`hover:bg-gray-50 cursor-pointer ${selectedIds.has(order.id!) ? "bg-orange-50" : ""}`} onClick={() => setDetailOrder(order)}>
                 <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                  {order.status === "packed" && (
+                  {isSelectable(order) && (
                     <input
                       type="checkbox"
                       checked={selectedIds.has(order.id!)}
@@ -637,6 +662,12 @@ export default function Orders() {
                           🔄 Reassign
                         </button>
                       </>
+                    )}
+                    {user?.role === "admin" && canAdminMarkDelivered(order.status) && (
+                      <button onClick={(e) => { e.stopPropagation(); setDeliverOrder(order); }}
+                        className="bg-green-100 text-green-700 text-xs px-3 py-1.5 rounded-lg hover:bg-green-200 font-medium">
+                        ✅ Mark Delivered
+                      </button>
                     )}
                     {order.status === "attempted" && (
                       <button onClick={(e) => { e.stopPropagation(); setReceiveBackOrder(order); }}
@@ -738,12 +769,12 @@ export default function Orders() {
 
       {showBulkAssign && (
         <BulkAssignModal
-          count={selectedIds.size}
+          count={[...selectedIds].filter((id) => orders.find((o) => o.id === id)?.status === "packed").length}
           deliveryUsers={deliveryUsers}
           onAssign={bulkAssignDelivery}
           onClose={() => setShowBulkAssign(false)}
           smartRegionMatch={smartRegionMatch}
-          selectedOrders={[...selectedIds].map(id => orders.find(o => o.id === id)).filter(Boolean) as Order[]}
+          selectedOrders={[...selectedIds].map(id => orders.find(o => o.id === id)).filter((o) => o?.status === "packed") as Order[]}
         />
       )}
 
@@ -763,7 +794,23 @@ export default function Orders() {
           onAssignAgent={(o) => { setSelectedOrder(o); setDetailOrder(null); }}
           onInvoice={(o) => { setInvoiceOrder(o); }}
           onCancel={(o) => { setCancelOrder(o); }}
+          onMarkDelivered={(o) => { setDeliverOrder(o); setDetailOrder(null); }}
           deliveryUsers={deliveryUsers}
+        />
+      )}
+      {deliverOrder && (
+        <MarkDeliveredModal
+          orders={[deliverOrder]}
+          onClose={() => setDeliverOrder(null)}
+          onDone={() => setDeliverOrder(null)}
+        />
+      )}
+      {showBulkDeliver && (
+        <MarkDeliveredModal
+          orders={([...selectedIds].map((id) => orders.find((o) => o.id === id)).filter(Boolean) as Order[])
+            .filter((o) => (BULK_DELIVERABLE_STATUSES as readonly string[]).includes(o.status))}
+          onClose={() => setShowBulkDeliver(false)}
+          onDone={() => { setShowBulkDeliver(false); setSelectedIds(new Set()); }}
         />
       )}
       {invoiceOrder && (
@@ -774,6 +821,220 @@ export default function Orders() {
           onAssign={assignDelivery} onClose={() => setSelectedOrder(null)}
           smartRegionMatch={smartRegionMatch} />
       )}
+    </div>
+  );
+}
+
+// ── Mark Delivered Modal (admin) ──────────────────────────────────
+// One order: date + optional payment collected at delivery.
+// Several orders (bulk): date only.
+function toLocalInput(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function MarkDeliveredModal({ orders, onClose, onDone }: {
+  orders: Order[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { user } = useAuthStore();
+  const single = orders.length === 1 ? orders[0] : null;
+  const [when, setWhen]       = useState<string>(toLocalInput(new Date()));
+  const [amount, setAmount]   = useState("");
+  const [mode, setMode]       = useState<"cash" | "upi" | "bank" | "cheque">("cash");
+  const [note, setNote]       = useState("");
+  const [saving, setSaving]   = useState(false);
+  const [progress, setProgress] = useState("");
+
+  const balance = single
+    ? Math.max(0, Math.round((single.totalAmount - (single.amountCollected ?? 0)) * 100) / 100)
+    : 0;
+  const amt = parseFloat(amount);
+  const amtValid = amount.trim() === "" || (!isNaN(amt) && amt >= 0 && amt <= balance + 0.01);
+  const whenDate = new Date(when);
+  const whenValid = !isNaN(whenDate.getTime()) && whenDate.getTime() <= Date.now() + 60_000;
+  // Orders placed AFTER the chosen date can't have been delivered on it
+  const placedAfter = orders.filter((o) => o.createdAt && new Date(o.createdAt).getTime() > whenDate.getTime());
+  const singleTooEarly = !!single && placedAfter.length > 0;
+  const canSave = orders.length > 0 && whenValid && !singleTooEarly && amtValid && !saving
+    && placedAfter.length < orders.length;
+
+  const hasPending = orders.some((o) => o.status === "pending");
+  const hasOutForDelivery = orders.some((o) => o.status === "out_for_delivery");
+
+  const handleSave = async () => {
+    if (!canSave || !user) return;
+    setSaving(true);
+    const iso = whenDate.toISOString();
+    if (single) {
+      try {
+        await adminMarkDelivered({
+          orderId: single.id!, deliveredAt: iso,
+          amount: amount.trim() === "" ? 0 : amt, paymentMode: mode, note,
+          adminId: user.uid, adminName: user.name,
+        });
+        onDone();
+      } catch (e: any) {
+        alert(e.message || "Could not mark as delivered.");
+      } finally { setSaving(false); }
+      return;
+    }
+    // Bulk — one transaction per order; report failures at the end
+    const failed: string[] = [];
+    const toDeliver = orders.filter((o) => !placedAfter.includes(o));
+    for (let i = 0; i < toDeliver.length; i++) {
+      const o = toDeliver[i];
+      setProgress(`${i + 1} / ${toDeliver.length}`);
+      try {
+        await adminMarkDelivered({
+          orderId: o.id!, deliveredAt: iso, note,
+          adminId: user.uid, adminName: user.name,
+        });
+      } catch (e: any) {
+        failed.push(`#${o.orderNo || o.id!.slice(0, 8)} (${o.customerName}): ${e.message}`);
+      }
+    }
+    setSaving(false); setProgress("");
+    if (failed.length > 0 || placedAfter.length > 0) {
+      alert(
+        `${toDeliver.length - failed.length} marked delivered` +
+        (placedAfter.length ? `, ${placedAfter.length} skipped (placed after the chosen date)` : "") +
+        (failed.length ? `, ${failed.length} failed:\n\n${failed.join("\n")}` : ".")
+      );
+    }
+    onDone();
+  };
+
+  useModalKeyboard({ onClose, onConfirm: handleSave, disabled: !canSave });
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-800">✅ Mark as Delivered</h3>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {single
+                ? <>#{single.orderNo || single.id!.slice(0, 8).toUpperCase()} · {single.customerName}</>
+                : <>{orders.length} orders · ₹{orders.reduce((s, o) => s + o.totalAmount, 0).toFixed(2)}</>}
+            </p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          {hasOutForDelivery && (
+            <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 text-xs text-amber-800">
+              <p className="font-semibold text-sm">⚠ Delivery agent has the goods</p>
+              This order is Out for Delivery. After you mark it delivered here, the delivery app can
+              no longer update it. If the agent collected cash, record it via Agent Cash / the Payment tab —
+              not twice.
+            </div>
+          )}
+          {hasPending && (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-xs text-blue-800">
+              This order is still <span className="font-semibold">Pending</span>. Marking it delivered will
+              also pack it — stock is deducted exactly like "Mark Packed".
+            </div>
+          )}
+          {!single && (
+            <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 max-h-40 overflow-y-auto text-xs">
+              {orders.map((o) => (
+                <div key={o.id} className="flex justify-between px-3 py-1.5">
+                  <span className="truncate">#{o.orderNo || o.id!.slice(0, 8)} · {o.customerName}</span>
+                  <span className="text-gray-500 flex-shrink-0 ml-2">₹{o.totalAmount.toFixed(2)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Delivered on *</label>
+            <input type="datetime-local" value={when} max={toLocalInput(new Date())}
+              min={single?.createdAt ? toLocalInput(new Date(single.createdAt)) : undefined}
+              onChange={(e) => setWhen(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300" />
+            <p className="text-xs text-gray-400 mt-1">
+              Reports use this date. Pick the real delivery date for older orders.
+            </p>
+            {!whenValid && <p className="text-xs text-red-500 mt-1">Date can't be in the future.</p>}
+            {singleTooEarly && (
+              <p className="text-xs text-red-500 mt-1">
+                Order was placed on {new Date(single!.createdAt).toLocaleString("en-IN")} — delivery can't be earlier.
+              </p>
+            )}
+            {!single && placedAfter.length > 0 && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1 mt-1">
+                {placedAfter.length} of {orders.length} order(s) were placed after this date and will be skipped.
+              </p>
+            )}
+          </div>
+
+          {single && (
+            <>
+              <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm space-y-1">
+                <div className="flex justify-between"><span className="text-gray-500">Bill</span><span>₹{single.totalAmount.toFixed(2)}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">Already collected</span><span className="text-green-600">₹{(single.amountCollected ?? 0).toFixed(2)}</span></div>
+                <div className="flex justify-between font-semibold"><span className="text-gray-600">Balance</span><span className={balance > 0 ? "text-red-600" : "text-green-600"}>₹{balance.toFixed(2)}</span></div>
+              </div>
+
+              {balance > 0 && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Amount collected at delivery (₹) <span className="text-xs text-gray-400 font-normal">optional</span>
+                  </label>
+                  <input type="number" min="0" step="0.01" value={amount}
+                    onChange={(e) => setAmount(e.target.value)} placeholder="0.00 — leave blank if not collected"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300" />
+                  <div className="flex gap-2 mt-2">
+                    <button type="button" onClick={() => setAmount(balance.toFixed(2))}
+                      className="text-xs bg-green-100 text-green-700 px-3 py-1 rounded-full hover:bg-green-200 font-medium">
+                      Full ₹{balance.toFixed(2)}
+                    </button>
+                    {amount && (
+                      <button type="button" onClick={() => setAmount("")}
+                        className="text-xs bg-gray-100 text-gray-600 px-3 py-1 rounded-full hover:bg-gray-200">
+                        Not collected
+                      </button>
+                    )}
+                  </div>
+                  {!amtValid && <p className="text-xs text-red-500 mt-1">Amount must be between ₹0 and ₹{balance.toFixed(2)}.</p>}
+                  {amount && amtValid && amt > 0 && (
+                    <div className="flex gap-2 mt-3">
+                      {(["cash", "upi", "bank", "cheque"] as const).map((m) => (
+                        <button key={m} type="button" onClick={() => setMode(m)}
+                          className={`flex-1 py-1.5 rounded-lg text-xs font-medium border capitalize ${
+                            mode === m ? "bg-orange-500 text-white border-orange-500" : "bg-white text-gray-500 border-gray-200"
+                          }`}>{m}</button>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-400 mt-1">
+                    Recorded like the Payment tab (ledger + this bill), dated on the delivery date. Money received
+                    directly by admin — not counted as delivery agent cash. Leave blank if the customer hasn't paid.
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Note <span className="text-xs text-gray-400 font-normal">optional</span></label>
+            <input value={note} onChange={(e) => setNote(e.target.value)}
+              placeholder="e.g. Delivered by shop vehicle"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-300" />
+          </div>
+        </div>
+
+        <div className="flex gap-3 px-6 py-4 border-t border-gray-100">
+          <button onClick={onClose} className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl text-sm">Cancel</button>
+          <button onClick={handleSave} disabled={!canSave}
+            className="flex-1 bg-green-600 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-green-700 disabled:opacity-50">
+            {saving ? (progress ? `Saving ${progress}…` : "Saving…") : single ? "Mark Delivered" : `Mark ${orders.length - placedAfter.length} Delivered`}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -900,6 +1161,7 @@ export function OrderDetailPanel({
   onAssignAgent,
   onInvoice,
   onCancel,
+  onMarkDelivered,
   deliveryUsers,
 }: {
   order: Order;
@@ -908,6 +1170,7 @@ export function OrderDetailPanel({
   onAssignAgent: (order: Order) => void;
   onInvoice: (order: Order) => void;
   onCancel: (order: Order) => void;
+  onMarkDelivered?: (order: Order) => void;
   deliveryUsers: AppUser[];
 }) {
   const { user: panelUser } = useAuthStore();
@@ -956,7 +1219,7 @@ export function OrderDetailPanel({
       done:  true,
       color: "bg-amber-400",
     }] : [
-      { label: "Delivered", time: fmt(order.deliveredAt), done: order.status === "delivered", color: "bg-green-400" },
+      { label: order.deliveredByAdmin ? `Delivered (marked by ${order.deliveredByName || "admin"})` : "Delivered", time: fmt(order.deliveredAt), done: order.status === "delivered", color: "bg-green-400" },
     ]),
     // Handover step — only shown for partial deliveries
     ...(isPartial ? [{
@@ -1107,19 +1370,31 @@ export function OrderDetailPanel({
                   )}
                 </div>
               )}
-              {/* Amount collected by delivery agent — only if different from advance */}
+              {/* After the advance: split what the delivery agent collected from
+                  what an admin recorded (Payment tab / Mark Delivered). */}
               {order.amountCollected !== undefined &&
                 order.status === "delivered" &&
-                order.amountCollected !== (order.advancePaid ?? 0) && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-green-600 font-medium">
-                    🚚 Collected at Delivery
-                  </span>
-                  <span className="font-medium text-green-600">
-                    ₹{(order.amountCollected - (order.advancePaid ?? 0)).toFixed(2)}
-                  </span>
-                </div>
-              )}
+                order.amountCollected !== (order.advancePaid ?? 0) && (() => {
+                  const afterAdvance = Math.max(0, order.amountCollected! - (order.advancePaid ?? 0));
+                  const byAdmin = Math.min(afterAdvance, order.adminCollected ?? 0);
+                  const byAgent = Math.round((afterAdvance - byAdmin) * 100) / 100;
+                  return (
+                    <>
+                      {byAgent > 0 && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-green-600 font-medium">🚚 Collected at Delivery</span>
+                          <span className="font-medium text-green-600">₹{byAgent.toFixed(2)}</span>
+                        </div>
+                      )}
+                      {byAdmin > 0 && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-green-600 font-medium">💰 Recorded by Admin</span>
+                          <span className="font-medium text-green-600">₹{byAdmin.toFixed(2)}</span>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               {/* Total collected so far (if any payment made) */}
               {order.amountCollected !== undefined && order.amountCollected > 0 && (
                 <div className="flex justify-between text-sm border-t border-gray-100 pt-1.5">
@@ -1346,6 +1621,32 @@ export function OrderDetailPanel({
                 className="flex-1 bg-indigo-500 text-white py-2.5 rounded-xl text-sm font-medium hover:bg-indigo-600"
               >
                 🚚 Assign Delivery Agent
+              </button>
+            )}
+            {isAdmin && onMarkDelivered && canAdminMarkDelivered(order.status) && (
+              <button
+                onClick={() => onMarkDelivered(order)}
+                className="flex-1 bg-green-600 text-white py-2.5 rounded-xl text-sm font-medium hover:bg-green-700"
+              >
+                ✅ Mark Delivered
+              </button>
+            )}
+            {isAdmin && canAdminUndoDelivered(order) && (
+              <button
+                onClick={async () => {
+                  if (!window.confirm(
+                    `Undo delivery for order #${order.orderNo || order.id!.slice(0, 8)}?\n\n` +
+                    `Status goes back to ${order.deliveryPersonId ? "Assigned" : "Packed"}. ` +
+                    `Payments already recorded stay as they are. Stock is not changed.`
+                  )) return;
+                  try {
+                    await adminUndoDelivered(order.id!, panelUser!.uid, panelUser!.name);
+                    onClose();
+                  } catch (e: any) { alert(e.message || "Could not undo delivery."); }
+                }}
+                className="flex-1 bg-amber-100 text-amber-800 py-2.5 rounded-xl text-sm font-medium hover:bg-amber-200"
+              >
+                ↩ Undo Delivered
               </button>
             )}
             {(order.status === "pending" || order.status === "packed" || order.status === "returned_to_warehouse") && isAdmin && (

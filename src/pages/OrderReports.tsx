@@ -709,7 +709,7 @@ function DeliveryPerfReport({ orders }: { orders: Order[] }) {
 
   // Delivery time buckets (from assigned to delivered)
   const timings = delivered
-    .filter(o => o.assignedAt && o.deliveredAt)
+    .filter(o => o.assignedAt && o.deliveredAt && !o.deliveredByAdmin) // admin-typed dates aren't real timings
     .map(o => ({
       order: o,
       hours: (new Date(o.deliveredAt!).getTime() - new Date(o.assignedAt!).getTime()) / 3600000,
