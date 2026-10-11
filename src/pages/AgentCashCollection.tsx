@@ -380,7 +380,8 @@ export default function AgentCashCollection() {
     orders.forEach((o) => {
       if (o.status === "cancelled") return;
 
-      const advance   = (o as any).advancePaid ?? 0;
+      // Field agent cash = advance for this bill + any extra that went to previous dues
+      const advance   = ((o as any).advancePaid ?? 0) + ((o as any).advanceToPreviousDues ?? 0);
       const collected = o.amountCollected ?? 0;
       // Exclude amounts an admin recorded directly (e.g. via the order drawer's
       // "Record Payment" or a Customers-page settlement) — that money was never

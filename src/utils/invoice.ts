@@ -423,6 +423,17 @@ function buildSpacerRow(isGST: boolean): string {
 
 // ─── HTML invoice builder ─────────────────────────────────────────────────────
 
+// Part of the advance collected with an order that went to previous dues
+// (new orders store it explicitly; older orders kept it inside advancePaid).
+function advanceExtraOf(order: any): number {
+  if (typeof order?.advanceToPreviousDues === "number") return order.advanceToPreviousDues;
+  return Math.max(0, round2((order?.advancePaid ?? 0) - (order?.totalAmount ?? 0)));
+}
+const advanceLabel = (order: any): string => {
+  const extra = advanceExtraOf(order);
+  return extra > 0 ? `Advance Paid (+ ₹${extra.toFixed(2)} paid towards previous due)` : "Advance Paid";
+};
+
 function buildInvoiceHTML(params: {
   order: Order;
   customer?: Partial<Customer>;
@@ -564,7 +575,7 @@ function buildInvoiceHTML(params: {
     : "";
 
   const advanceRow = advancePaid > 0
-    ? summaryRow("Advance Paid", `- ${advancePaid.toFixed(2)}`)
+    ? summaryRow(advanceLabel(order), `- ${advancePaid.toFixed(2)}`)
     : "";
 
   // The final amount the customer still owes — this is what the QR encodes too
@@ -1222,7 +1233,8 @@ export async function buildInvoicePDF(
   const historicalDue: number = (() => {
     if (options?.customerDue !== undefined) return options.customerDue;
     const currentDue   = (customer as any)?.outstandingDue ?? 0;
-    const orderBalance = (order as any).balanceDue ?? 0;
+    // Older orders with an advance bigger than the bill stored a negative balanceDue
+    const orderBalance = Math.max(0, (order as any).balanceDue ?? 0);
     return Math.max(0, round2(currentDue - orderBalance));
   })();
 
@@ -1230,7 +1242,9 @@ export async function buildInvoicePDF(
   // for already-delivered orders. For pending orders both may be 0 — that's correct,
   // the QR then encodes the full balance due.
   const advancePaid: number = (() => {
-    if ((order as any).advancePaid !== undefined) return (order as any).advancePaid as number;
+    // Never more than the bill — anything above it went to previous dues
+    // (see advanceExtraOf) and is shown as a note on the Advance row.
+    if ((order as any).advancePaid !== undefined) return Math.min((order as any).advancePaid as number, order.totalAmount);
     if (order.status === "delivered" && order.amountCollected !== undefined) return order.amountCollected;
     return 0;
   })();
@@ -1383,7 +1397,7 @@ export async function buildInvoicePDF(
   const totalPayableRow2 = hasAdjustments2
     ? summaryRowHtml("Total Payable", totalPayable2.toFixed(2), true)
     : "";
-  const advanceRow2 = advancePaid > 0 ? summaryRowHtml("Advance Paid", `- ${advancePaid.toFixed(2)}`) : "";
+  const advanceRow2 = advancePaid > 0 ? summaryRowHtml(advanceLabel(enrichedOrder), `- ${advancePaid.toFixed(2)}`) : "";
   const balanceRow2 = advancePaid > 0 ? summaryRowHtml("Balance to Pay", balance2 > 0 ? balance2.toFixed(2) : "NIL", true) : "";
 
   const bankDetails2 = isGST && (biz?.bankName || biz?.upiId) ? `

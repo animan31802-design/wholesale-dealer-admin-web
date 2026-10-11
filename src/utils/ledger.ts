@@ -2,6 +2,7 @@ import {
   collection, addDoc, getDocs, orderBy, query, where,
   doc, updateDoc, runTransaction, getDoc
 } from "firebase/firestore";
+import type { Transaction } from "firebase/firestore";
 import { db } from "../firebase/config";
 import { LedgerEntry } from "../types/ledger";
 import { Customer, Order, DevReconciliationEntry } from "../types";
@@ -157,6 +158,91 @@ export async function getOverdueCustomers(
   // Sort by most overdue first
   results.sort((a, b) => b.daysOverdue - a.daysOverdue);
   return results;
+}
+
+// ── Advance / credit spill to older unpaid orders ──────────────────
+// Used when money received is more than the order it came in with — an
+// advance bigger than the new bill, or the advance of an order that is
+// being cancelled. The extra is applied to the customer's OTHER unpaid
+// orders oldest-first (same fill rule as applyPaymentToOrders), so
+// order.amountCollected stays in step with the ledger. Anything left after
+// every unpaid order is settled simply stays as a ledger credit (it has
+// already reduced customer.outstandingDue).
+
+// Outside a transaction: candidate order IDs, oldest-first. The caller then
+// re-reads each one with t.get() inside its transaction (live balances win).
+export async function getUnpaidOrderIdsOldestFirst(
+  customerId: string,
+  excludeOrderId?: string
+): Promise<string[]> {
+  // Equality filter only + client-side sort → no composite index needed
+  const snap = await getDocs(query(collection(db, "orders"), where("customerId", "==", customerId)));
+  return snap.docs
+    .map((d) => ({ ...(d.data() as Order), id: d.id }))
+    .filter((o) =>
+      o.id !== excludeOrderId &&
+      o.status !== "cancelled" &&
+      round2((o.totalAmount ?? 0) - (o.amountCollected ?? 0)) > 0.009
+    )
+    .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
+    .map((o) => o.id!);
+}
+
+export interface SpillAllocation {
+  orderId: string;
+  orderNo: string;
+  amountApplied: number;
+  newAmountCollected: number;
+  newAdminCollected: number;
+  totalAmount: number;
+}
+
+// Pure: allocate `amount` across live order snapshots (already oldest-first).
+export function planSpill(
+  orders: Array<{ id: string; data: Order | undefined }>,
+  amount: number
+): { allocations: SpillAllocation[]; leftover: number } {
+  let remaining = round2(amount);
+  const allocations: SpillAllocation[] = [];
+  for (const { id, data } of orders) {
+    if (remaining <= 0.009) break;
+    if (!data || data.status === "cancelled") continue;
+    const collected = data.amountCollected ?? 0;
+    const balance = Math.max(0, round2(data.totalAmount - collected));
+    if (balance <= 0.009) continue;
+    const applied = Math.min(balance, remaining);
+    remaining = round2(remaining - applied);
+    allocations.push({
+      orderId: id,
+      orderNo: data.orderNo || id.slice(0, 8).toUpperCase(),
+      amountApplied: round2(applied),
+      newAmountCollected: round2(collected + applied),
+      // Counted as "not collected by the delivery agent" so AgentCashCollection
+      // doesn't credit this money to whoever delivers the older order.
+      newAdminCollected: round2((data.adminCollected ?? 0) + applied),
+      totalAmount: data.totalAmount,
+    });
+  }
+  return { allocations, leftover: Math.max(0, remaining) };
+}
+
+// Write phase helper — call only after every t.get() in the transaction.
+export function writeSpill(
+  t: Transaction,
+  allocations: SpillAllocation[],
+  at: string,
+  paymentMode?: string
+): void {
+  for (const a of allocations) {
+    const upd: Record<string, unknown> = {
+      amountCollected: a.newAmountCollected,
+      adminCollected:  a.newAdminCollected,
+      balanceDue:      Math.max(0, round2(a.totalAmount - a.newAmountCollected)),
+      lastPaymentAt:   at,
+    };
+    if (paymentMode) upd.paymentMode = paymentMode;
+    t.update(doc(db, "orders", a.orderId), upd);
+  }
 }
 
 // ── Path helper ───────────────────────────────────────────────────

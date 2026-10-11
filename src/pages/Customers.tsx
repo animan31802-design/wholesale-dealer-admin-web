@@ -955,7 +955,7 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                             <div className="border border-gray-200 rounded-lg bg-white divide-y divide-gray-100 ml-4">
                               {e.allocations!.map((a, i) => (
                                 <div key={i} className="flex items-center justify-between px-3 py-1.5 text-xs">
-                                  <span className="text-gray-500">Order #{a.orderNo}</span>
+                                  <span className="text-gray-500">{a.orderId ? `Order #${a.orderNo}` : "Previous balance (no open bill)"}</span>
                                   <span className="font-medium text-green-600">₹{a.amountApplied.toFixed(2)}</span>
                                 </div>
                               ))}

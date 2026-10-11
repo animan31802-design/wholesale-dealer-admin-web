@@ -6,6 +6,7 @@ import {
 import { db } from "../firebase/config";
 import { Customer, Product, Order, OrderItem, GSTRate, ProductUnit, OrderItemOverride } from "../types";
 import { useAuthStore } from "../store/authStore";
+import { getUnpaidOrderIdsOldestFirst, planSpill, writeSpill } from "../utils/ledger";
 import { useModalKeyboard } from "../hooks/useModalKeyboard";
 import { useTamilSearch } from "../utils/UseTamilSearch";
 import { TamilSearchInput } from "../components/TamilSearchInput";
@@ -90,7 +91,10 @@ function buildWhatsAppMessage(params: {
   prevBalance: number;
 }): string {
   const { businessName, orderId, customerName, items, grandTotal, advancePaid, prevBalance } = params;
-  const balanceDue = round2(grandTotal - advancePaid);
+  // Balance after this payment across everything owed (bill + previous due)
+  const balanceDue = round2(grandTotal + Math.max(0, prevBalance) - advancePaid);
+  const toThisBill = Math.min(advancePaid, grandTotal);
+  const toPrevious = round2(advancePaid - toThisBill);
   const shortId    = orderId.slice(0, 8).toUpperCase();
 
   const itemLines = items.map((item, i) =>
@@ -119,6 +123,9 @@ function buildWhatsAppMessage(params: {
 
   if (advancePaid > 0) {
     lines.push(`*Advance Paid:*  ₹${fmtPrice(advancePaid)}`);
+    if (toPrevious > 0) {
+      lines.push(`   ₹${fmtPrice(toThisBill)} for this bill, ₹${fmtPrice(toPrevious)} towards previous due`);
+    }
     lines.push(`*Balance to Pay:*  ₹${fmtPrice(balanceDue > 0 ? balanceDue : 0)}`);
   }
 
@@ -973,16 +980,38 @@ export default function CreateOrderPage() {
         costPriceMap[item.productId] = prodIndex[item.productId]?.costPrice ?? 0;
       });
 
+      // ── Advance split ──────────────────────────────────────────
+      // Up to the bill amount goes to this order; anything above it is a
+      // payment toward the customer's previous due and is applied to their
+      // older unpaid orders oldest-first (re-read live inside the transaction).
+      const advanceForThis   = round2(Math.min(paid, grandTotal));
+      const advanceExcess    = round2(paid - advanceForThis);
+      const spillCandidateIds = advanceExcess > 0
+        ? await getUnpaidOrderIdsOldestFirst(customer.id!)
+        : [];
+
       await runTransaction(db, async (t) => {
         // ── READ PHASE: ALL reads must come before any writes ─────
         const productRefs  = billItems.map((item) => doc(db, "products", item.productId));
         const customerRef  = doc(db, "customers", customer.id!);
+        const spillRefs    = spillCandidateIds.map((id) => doc(db, "orders", id));
 
-        // Read products AND customer atomically before any writes
-        const [productSnaps, customerSnap] = await Promise.all([
+        // Read products, customer AND older unpaid orders before any writes
+        const [productSnaps, customerSnap, spillSnaps] = await Promise.all([
           Promise.all(productRefs.map((ref) => t.get(ref))),
           t.get(customerRef),
+          Promise.all(spillRefs.map((ref) => t.get(ref))),
         ]);
+
+        // Live check: advance can never exceed bill + what the customer owes right now
+        const liveDueNow = customerSnap.exists() ? (customerSnap.data().outstandingDue ?? 0) : prevBalance;
+        if (paid > round2(liveDueNow + grandTotal) + 0.01) {
+          throw new Error(`Advance ₹${paid.toFixed(2)} is more than bill + current due (₹${round2(liveDueNow + grandTotal).toFixed(2)}). Please refresh and try again.`);
+        }
+        const spill = planSpill(
+          spillSnaps.map((s) => ({ id: s.id, data: s.exists() ? (s.data() as Order) : undefined })),
+          advanceExcess
+        );
 
         productSnaps.forEach((snap, i) => {
           const item = billItems[i];
@@ -1050,12 +1079,13 @@ export default function CreateOrderPage() {
           items:           cleanItems,
           // totalAmount = order value only (without prevBalance, which is tracked separately)
           totalAmount:     round2(grandTotal),
-          // advancePaid = what was collected at order creation (can be 0)
-          advancePaid:     paid,
+          // advancePaid = part of the advance applied to THIS bill (≤ totalAmount).
+          // Any extra is in advanceToPreviousDues (set below).
+          advancePaid:     advanceForThis,
           // balanceDue = what still needs to be collected on delivery
-          balanceDue:      round2(grandTotal - paid),
-          // amountCollected is set by delivery agent on delivery; default to advance paid
-          amountCollected: paid,
+          balanceDue:      round2(grandTotal - advanceForThis),
+          // amountCollected is set by delivery agent on delivery; default to advance applied
+          amountCollected: advanceForThis,
           paymentMode:     paid > 0 ? paymentMode : "pending",
           status:          "pending",
           createdAt:       new Date().toISOString(),
@@ -1070,6 +1100,13 @@ export default function CreateOrderPage() {
         // stamp it so Collections/Payment Mode reports (which key off
         // lastPaymentAt, not createdAt) pick it up in the right period.
         if (paid > 0)                        orderPayload.lastPaymentAt = new Date().toISOString();
+        if (advanceExcess > 0) {
+          orderPayload.advanceToPreviousDues = advanceExcess;
+          orderPayload.advanceAllocations = spill.allocations.map((a) => ({
+            orderId: a.orderId, orderNo: a.orderNo, amountApplied: a.amountApplied,
+          }));
+          if (spill.leftover > 0) orderPayload.advanceToBalance = spill.leftover;
+        }
 
         const orderRef = doc(collection(db, "orders"));
         newOrderId     = orderRef.id;
@@ -1093,8 +1130,11 @@ export default function CreateOrderPage() {
         // Use the customerSnap already read in the READ PHASE above —
         // no additional t.get() here, which would violate read-before-write rule.
         const now     = new Date().toISOString();
-        const liveDue = customerSnap.exists() ? (customerSnap.data().outstandingDue ?? 0) : prevBalance;
-        const newDue  = round2(liveDue + grandTotal - paid);
+        const liveDue = liveDueNow;
+        const newDue  = Math.max(0, round2(liveDue + grandTotal - paid));
+
+        // Older orders that received the extra advance
+        writeSpill(t, spill.allocations, now, paymentMode);
         // FIX: also stamp lastOrderAt / lastOrderId / updatedAt on customer
         t.update(customerRef, {
           outstandingDue: newDue,
@@ -1122,7 +1162,7 @@ export default function CreateOrderPage() {
 
         // FIX: unified type "advance_collected" (matches mobile) instead of "delivery_payment"
         if (paid > 0) {
-          t.set(doc(ledgerCol), {
+          const advanceEntry: Record<string, unknown> = {
             type:          "advance_collected",
             direction:     "credit",
             amount:        round2(paid),
@@ -1133,7 +1173,21 @@ export default function CreateOrderPage() {
             createdBy:     user.uid,
             createdByName: user.name,
             createdAt:     now,
-          });
+          };
+          if (advanceExcess > 0) {
+            // Breakdown (shown as expandable rows in the Ledger tab):
+            // this bill, then older bills, then any remainder with no open bill.
+            const allocs: Array<{ orderId: string; orderNo: string; amountApplied: number }> = [
+              { orderId: newOrderId, orderNo: newOrderNo, amountApplied: advanceForThis },
+              ...spill.allocations.map((a) => ({ orderId: a.orderId, orderNo: a.orderNo, amountApplied: a.amountApplied })),
+            ];
+            if (spill.leftover > 0) allocs.push({ orderId: "", orderNo: "", amountApplied: spill.leftover });
+            advanceEntry.allocations = allocs;
+            advanceEntry.note =
+              "Advance collected at order #" + newOrderNo + " (" + paymentMode + ") — ₹" +
+              advanceForThis.toFixed(2) + " this bill, ₹" + advanceExcess.toFixed(2) + " to previous due";
+          }
+          t.set(doc(ledgerCol), advanceEntry);
         }
       });
 
@@ -1879,6 +1933,28 @@ export default function CreateOrderPage() {
                   placeholder="0.00 (optional — leave blank for pay on delivery)"
                   className="w-full border border-blue-200 rounded-xl px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white mb-2"
                 />
+
+                {/* Advance more than this bill → the extra goes to previous due */}
+                {(() => {
+                  const p = parseFloat(paidAmount);
+                  if (isNaN(p) || p <= grandTotal + 0.009 || grandTotal <= 0) return null;
+                  const extra = round2(p - grandTotal);
+                  const over  = round2(p - totalOwed);
+                  return (
+                    <div className={`text-xs rounded-lg px-3 py-2 mb-2 border ${over > 0.01 ? "bg-red-50 border-red-200 text-red-700" : "bg-white border-blue-200 text-blue-800"}`}>
+                      {over > 0.01 ? (
+                        <>Advance is ₹{fmtPrice(over)} more than bill + previous due (₹{fmtPrice(totalOwed)}).</>
+                      ) : (
+                        <>
+                          ₹{fmtPrice(grandTotal)} for this bill · <span className="font-semibold">₹{fmtPrice(extra)} to previous due</span>
+                          <span className="block text-blue-500 mt-0.5">
+                            Applied to the oldest unpaid bills first. Remaining due after this order: ₹{fmtPrice(Math.max(0, round2(totalOwed - p)))}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Quick chips — only shown when amount > 0 */}
                 {grandTotal > 0 && (

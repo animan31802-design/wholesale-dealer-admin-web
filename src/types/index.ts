@@ -193,7 +193,19 @@ export interface Order {
   regionName?: string;
   items: OrderItem[];
   totalAmount: number;
-  advancePaid?: number;      // advance collected by field agent at order creation
+  advancePaid?: number;      // advance applied to THIS order at creation (never more than totalAmount on new orders; older data may exceed it)
+  // Part of the cash collected with this order that was more than this bill
+  // and went to the customer's previous dues (older unpaid orders oldest-first,
+  // then any remainder as a plain ledger credit). Field-agent cash for the
+  // order = advancePaid + advanceToPreviousDues.
+  advanceToPreviousDues?: number;
+  advanceAllocations?: Array<{ orderId: string; orderNo: string; amountApplied: number }>;
+  advanceToBalance?: number;  // portion of advanceToPreviousDues with no open order — ledger credit only
+  refundDue?: number;         // set on cancel when an advance couldn't be absorbed by any due
+  refundNote?: string;
+  // On cancel: the advance kept as payment toward previous dues
+  cancelAdvanceKept?: number;
+  cancelAdvanceAllocations?: Array<{ orderId: string; orderNo: string; amountApplied: number }>;
   balanceDue?: number;       // totalAmount - amountCollected; remaining balance
   amountCollected?: number;  // cumulative total collected so far (advance + delivery + admin-recorded)
   adminCollected?: number;   // portion of amountCollected added via admin "Record Payment" (NOT physically held by the delivery agent — excluded from their cash-in-hand)

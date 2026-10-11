@@ -10,7 +10,7 @@ import { Order, AppUser } from "../types";
 import { useAuthStore } from "../store/authStore";
 import { useModalKeyboard } from "../hooks/useModalKeyboard";
 const fmtQ = (n: number) => parseFloat(n.toFixed(4)).toString();
-import { recordSingleOrderPayment, devReconcileOrderPayment } from "../utils/ledger";
+import { recordSingleOrderPayment, devReconcileOrderPayment, getUnpaidOrderIdsOldestFirst, planSpill, writeSpill } from "../utils/ledger";
 import Pagination from "../components/Pagination";
 import { useTamilSearch } from "../utils/UseTamilSearch";
 import { TamilSearchInput } from "../components/TamilSearchInput";
@@ -1092,6 +1092,21 @@ export function OrderDetailPanel({
                   <span className="font-medium text-blue-600">₹{(order.advancePaid ?? 0).toFixed(2)}</span>
                 </div>
               )}
+              {/* Extra advance collected with this order that went to previous dues */}
+              {(order.advanceToPreviousDues ?? 0) > 0 && (
+                <div className="text-xs bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 text-blue-700">
+                  <p>
+                    + ₹{(order.advanceToPreviousDues ?? 0).toFixed(2)} collected with this order went to previous dues
+                    (total cash ₹{((order.advancePaid ?? 0) + (order.advanceToPreviousDues ?? 0)).toFixed(2)})
+                  </p>
+                  {(order.advanceAllocations ?? []).map((a) => (
+                    <p key={a.orderId} className="text-blue-500">· Order #{a.orderNo}: ₹{a.amountApplied.toFixed(2)}</p>
+                  ))}
+                  {(order.advanceToBalance ?? 0) > 0 && (
+                    <p className="text-blue-500">· Previous balance (no open bill): ₹{(order.advanceToBalance ?? 0).toFixed(2)}</p>
+                  )}
+                </div>
+              )}
               {/* Amount collected by delivery agent — only if different from advance */}
               {order.amountCollected !== undefined &&
                 order.status === "delivered" &&
@@ -1237,6 +1252,14 @@ export function OrderDetailPanel({
             <div className="px-6 py-5 border-b border-gray-100 bg-red-50">
               <p className="text-xs font-semibold text-red-400 uppercase tracking-widest mb-3">Cancellation Details</p>
               {/* Refund notice — shown when advance was collected and a physical refund is due */}
+              {(order.cancelAdvanceKept ?? 0) > 0 && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 text-xs text-blue-700">
+                  <p className="font-semibold text-sm text-blue-800">₹{(order.cancelAdvanceKept ?? 0).toFixed(2)} kept toward previous due</p>
+                  {(order.cancelAdvanceAllocations ?? []).map((a) => (
+                    <p key={a.orderId}>· Order #{a.orderNo}: ₹{a.amountApplied.toFixed(2)}</p>
+                  ))}
+                </div>
+              )}
               {(order as any).refundDue > 0 && (
                 <div className="bg-amber-100 border border-amber-300 rounded-lg p-3 mb-3">
                   <p className="text-sm font-semibold text-amber-800">💰 Physical Refund Required</p>
@@ -1738,15 +1761,28 @@ function CancelOrderModal({
     if (!reason.trim()) return;
     setSaving(true);
     try {
+      // Money already received on this order (advance and/or payments recorded
+      // against it). On cancel it is KEPT as payment toward the customer's
+      // previous due — applied to their other unpaid orders oldest-first —
+      // and only what no due can absorb is flagged for refund.
+      const moneyOnOrder = Math.min(
+        order.amountCollected ?? order.advancePaid ?? 0,
+        order.totalAmount
+      );
+      const otherUnpaidIds = moneyOnOrder > 0
+        ? await getUnpaidOrderIdsOldestFirst(order.customerId, order.id)
+        : [];
+
       await runTransaction(db, async (t) => {
         // ── READS FIRST ──────────────────────────────────────────
         const productRefs = order.items.map((item) =>
           doc(db, "products", item.productId)
         );
         const customerRef  = doc(db, "customers", order.customerId);
-        const [productSnaps, customerSnap] = await Promise.all([
+        const [productSnaps, customerSnap, otherSnaps] = await Promise.all([
           Promise.all(productRefs.map((ref) => t.get(ref))),
           t.get(customerRef),
+          Promise.all(otherUnpaidIds.map((id) => t.get(doc(db, "orders", id)))),
         ]);
 
         // ── WRITES AFTER ALL READS ────────────────────────────────
@@ -1783,51 +1819,71 @@ function CancelOrderModal({
         });
 
         // ── Reverse the order's effect on the customer ledger ──────────────
-        // Logic:
-        //   netDebit  = what was actually added to outstandingDue at order creation
-        //             = totalAmount - advancePaid  (advance reduced the due at placement)
-        //   newDue    = currentDue - netDebit  (always clamped to ≥ 0)
-        //
-        // If newDue goes to 0 AND advance > 0:  the advance was physical cash collected
-        // by the field agent.  That cash must be physically returned to the customer.
-        // We flag this with a "refundDue" field on the cancelled order so the admin
-        // and field agent know money needs to go back.
+        // The whole bill is reversed (it was debited in full at creation).
+        // Money already received on it stays as a payment toward the
+        // customer's other dues:
+        //   newDue  = currentDue - totalAmount            (clamped ≥ 0)
+        //   refund  = the part of that money no due could absorb
+        //   kept    = moneyOnOrder - refund  → applied to other unpaid orders
+        //             oldest-first; any remainder is just a ledger credit
+        // Ledger credit = exactly what outstandingDue went down by, so the
+        // ledger and outstandingDue stay equal.
         if (customerSnap.exists()) {
-          const advance    = order.advancePaid ?? 0;
+          const nowIso     = new Date().toISOString();
           const currentDue = customerSnap.data().outstandingDue ?? 0;
-          const netDebit   = Math.max(0, order.totalAmount - advance);
-          const rawNewDue  = Math.round((currentDue - netDebit) * 100) / 100;
+          const rawNewDue  = Math.round((currentDue - order.totalAmount) * 100) / 100;
           const newDue     = Math.max(0, rawNewDue);
-
-          // If cancelling wipes out more due than exists → advance must be refunded
-          const refundAmount = advance > 0 && rawNewDue < 0
-            ? Math.round(Math.abs(rawNewDue) * 100) / 100
+          const refundAmount = rawNewDue < 0
+            ? Math.min(moneyOnOrder, Math.round(Math.abs(rawNewDue) * 100) / 100)
             : 0;
+          const kept = Math.max(0, Math.round((moneyOnOrder - refundAmount) * 100) / 100);
+          const reversed = Math.round((currentDue - newDue) * 100) / 100;
 
-          t.update(customerRef, { outstandingDue: newDue, updatedAt: new Date().toISOString() });
+          const spill = planSpill(
+            otherSnaps.map((s) => ({ id: s.id, data: s.exists() ? (s.data() as Order) : undefined })),
+            kept
+          );
+          writeSpill(t, spill.allocations, nowIso);
 
-          // Ledger entry — credit only what was actually reversed on outstandingDue
+          t.update(customerRef, { outstandingDue: newDue, updatedAt: nowIso });
+
           const orderRef2 = order.orderNo || (order.id ?? "").slice(0, 8).toUpperCase();
-          const ledgerEntryRef = doc(collection(db, "customers", order.customerId, "payments"));
-          t.set(ledgerEntryRef, {
+          const noteParts = [`Order #${orderRef2} cancelled — ${reason.trim()}`];
+          if (kept > 0)         noteParts.push(`₹${kept.toFixed(2)} already paid kept toward previous due`);
+          if (refundAmount > 0) noteParts.push(`₹${refundAmount.toFixed(2)} to be refunded`);
+
+          const ledgerEntry: Record<string, unknown> = {
             type:          "order_cancelled",
             direction:     "credit",
-            amount:        netDebit,      // exactly what was reversed on outstandingDue
+            amount:        reversed,      // exactly what was reversed on outstandingDue
             orderId:       order.id,
             orderNo:       order.orderNo ?? "",
-            note:          `Order #${orderRef2} cancelled — ${reason.trim()}`,
+            note:          noteParts.join(" · "),
             createdBy:     user!.uid,
             createdByName: user!.name,
-            createdAt:     new Date().toISOString(),
-          });
-
-          // Flag refund needed on the order doc so admin / field agent can see it
-          if (refundAmount > 0) {
-            t.update(doc(db, "orders", order.id!), {
-              refundDue:       refundAmount,
-              refundNote:      `Advance of ₹${advance.toFixed(2)} was collected — ₹${refundAmount.toFixed(2)} must be returned to customer`,
-            });
+            createdAt:     nowIso,
+          };
+          if (spill.allocations.length > 0 || spill.leftover > 0) {
+            const allocs = spill.allocations.map((a) => ({ orderId: a.orderId, orderNo: a.orderNo, amountApplied: a.amountApplied }));
+            if (spill.leftover > 0) allocs.push({ orderId: "", orderNo: "", amountApplied: spill.leftover });
+            ledgerEntry.allocations = allocs;
           }
+          const ledgerEntryRef = doc(collection(db, "customers", order.customerId, "payments"));
+          t.set(ledgerEntryRef, ledgerEntry);
+
+          // Record what happened to the money on the cancelled order itself
+          const orderUpd: Record<string, unknown> = {};
+          if (kept > 0) {
+            orderUpd.cancelAdvanceKept = kept;
+            orderUpd.cancelAdvanceAllocations = spill.allocations.map((a) => ({
+              orderId: a.orderId, orderNo: a.orderNo, amountApplied: a.amountApplied,
+            }));
+          }
+          if (refundAmount > 0) {
+            orderUpd.refundDue  = refundAmount;
+            orderUpd.refundNote = `₹${moneyOnOrder.toFixed(2)} was collected on this order — ₹${refundAmount.toFixed(2)} must be returned to customer (no remaining due to adjust against)`;
+          }
+          if (Object.keys(orderUpd).length > 0) t.update(doc(db, "orders", order.id!), orderUpd);
         }
       });
 
@@ -1882,20 +1938,23 @@ function CancelOrderModal({
           ))}
         </div>
 
-        {/* Advance refund notice — only shown when advance was collected */}
-        {(order.advancePaid ?? 0) > 0 && (
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-5">
-            <p className="text-sm text-amber-800 font-semibold mb-1">
-              💰 Advance was collected — physical refund may be required
-            </p>
-            <p className="text-xs text-amber-700">
-              The field agent collected <strong>₹{(order.advancePaid ?? 0).toFixed(2)}</strong> as advance.
-              {(order.advancePaid ?? 0) >= order.totalAmount
-                ? " Since the full amount was already collected, the entire advance must be returned to the customer."
-                : ` After cancellation, check the customer's remaining balance — if it reaches ₹0, the remaining advance of ₹${Math.max(0, (order.advancePaid ?? 0) - (order.totalAmount - (order.advancePaid ?? 0))).toFixed(2)} must be returned physically.`}
-            </p>
-          </div>
-        )}
+        {/* Money already received on this order — kept toward previous due */}
+        {(() => {
+          const money = Math.min(order.amountCollected ?? order.advancePaid ?? 0, order.totalAmount);
+          if (money <= 0) return null;
+          return (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-5">
+              <p className="text-sm text-amber-800 font-semibold mb-1">
+                💰 ₹{money.toFixed(2)} was already received on this order
+              </p>
+              <p className="text-xs text-amber-700">
+                The full bill of ₹{order.totalAmount.toFixed(2)} will be reversed. The ₹{money.toFixed(2)} already
+                paid is kept as payment toward the customer's previous due (oldest unpaid bills first).
+                Only if the customer has no remaining due will the leftover be marked for refund.
+              </p>
+            </div>
+          );
+        })()}
 
         <div className="flex gap-3">
           <button
