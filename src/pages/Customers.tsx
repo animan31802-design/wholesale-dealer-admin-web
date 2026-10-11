@@ -819,7 +819,7 @@ function LedgerModal({ customer, isAdmin, onClose }: {
           onChanged={fetchOrders}
         />
       )}
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col">
 
         {/* Header */}
         <div className="flex items-start justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
@@ -863,7 +863,7 @@ function LedgerModal({ customer, isAdmin, onClose }: {
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto overflow-x-auto">
 
           {/* Ledger tab */}
           {tab === "ledger" && (
@@ -881,9 +881,9 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                   <col className="w-[88px]" />
                   <col className="w-[104px]" />
                   <col />
-                  <col className="w-[76px]" />
-                  <col className="w-[76px]" />
-                  <col className="w-[92px]" />
+                  <col className="w-[96px]" />
+                  <col className="w-[96px]" />
+                  <col className="w-[108px]" />
                 </colgroup>
                 <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide sticky top-0">
                   <tr>
@@ -992,12 +992,12 @@ function LedgerModal({ customer, isAdmin, onClose }: {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide sticky top-0">
                   <tr>
-                    <th className="px-5 py-3 text-left">Order</th>
-                    <th className="px-5 py-3 text-left">Date</th>
-                    <th className="px-5 py-3 text-left">Agent</th>
-                    <th className="px-5 py-3 text-right">Amount</th>
-                    <th className="px-5 py-3 text-left">Status</th>
-                    <th className="px-5 py-3 text-right">Collected</th>
+                    <th className="px-3 py-3 text-left">Order</th>
+                    <th className="px-3 py-3 text-left">Date</th>
+                    <th className="px-3 py-3 text-left">Agent</th>
+                    <th className="px-3 py-3 text-right">Amount</th>
+                    <th className="px-3 py-3 text-left">Status</th>
+                    <th className="px-3 py-3 text-right">Collected</th>
                     <th className="px-3 py-3 text-center">Invoice</th>
                   </tr>
                 </thead>
@@ -1015,7 +1015,7 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                     const balance = o.amountCollected !== undefined ? o.totalAmount - o.amountCollected : null;
                     return (
                       <tr key={o.id} className="hover:bg-gray-50">
-                        <td className="px-5 py-3 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap">
                           <p className="font-mono text-xs font-semibold text-gray-800">
                             #{o.orderNo ?? o.id!.slice(0, 8).toUpperCase()}
                           </p>
@@ -1023,17 +1023,17 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                             <p className="text-[10px] text-gray-400 mt-0.5">Inv {o.invoiceNumber}</p>
                           )}
                         </td>
-                        <td className="px-5 py-3 text-gray-500 whitespace-nowrap text-xs">
+                        <td className="px-3 py-3 text-gray-500 whitespace-nowrap text-xs">
                           {new Date(o.createdAt).toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" })}
                         </td>
-                        <td className="px-5 py-3 text-gray-600 text-xs">{o.agentName}</td>
-                        <td className="px-5 py-3 text-right font-medium text-gray-800">₹{o.totalAmount.toFixed(2)}</td>
-                        <td className="px-5 py-3">
+                        <td className="px-3 py-3 text-gray-600 text-xs">{o.agentName}</td>
+                        <td className="px-3 py-3 text-right font-medium text-gray-800">₹{o.totalAmount.toFixed(2)}</td>
+                        <td className="px-3 py-3">
                           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_C[o.status] || ""}`}>
                             {STATUS_L[o.status] || o.status}
                           </span>
                         </td>
-                        <td className="px-5 py-3 text-right text-xs">
+                        <td className="px-3 py-3 text-right text-xs">
                           {o.amountCollected !== undefined ? (
                             <div>
                               <span className="text-green-600 font-medium">₹{o.amountCollected.toFixed(2)}</span>
@@ -1063,10 +1063,10 @@ function LedgerModal({ customer, isAdmin, onClose }: {
                 </tbody>
                 <tfoot className="bg-gray-50 border-t border-gray-200">
                   <tr>
-                    <td colSpan={3} className="px-5 py-3 text-xs font-semibold text-gray-500">
+                    <td colSpan={3} className="px-3 py-3 text-xs font-semibold text-gray-500">
                       {custOrders.length} orders total
                     </td>
-                    <td className="px-5 py-3 text-right font-bold text-gray-800">
+                    <td className="px-3 py-3 text-right font-bold text-gray-800">
                       ₹{custOrders.reduce((s,o) => s + o.totalAmount, 0).toFixed(2)}
                     </td>
                     <td colSpan={3} />
